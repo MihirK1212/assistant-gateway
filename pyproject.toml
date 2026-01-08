@@ -1,0 +1,9 @@
+[project]
+name = "assistant-gateway"
+version = "0.1.0"
+
+[tool.setuptools]
+package-dir = {"" = "src/python"}
+
+[tool.setuptools.packages.find]
+where = ["src/python"]
