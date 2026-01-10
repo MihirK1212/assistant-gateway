@@ -23,12 +23,12 @@ class StoredUserInput(UserInput, StoredInteractionMetadata):
     pass
 
 
-class StoredAssistantOutput(AgentOutput, StoredInteractionMetadata):
+class StoredAgentOutput(AgentOutput, StoredInteractionMetadata):
     pass
 
 StoredAgentInteraction = Union[
     StoredUserInput,
-    StoredAssistantOutput,
+    StoredAgentOutput,
 ]
 
 class UserContext(BaseModel):

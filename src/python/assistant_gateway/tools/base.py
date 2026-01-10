@@ -14,25 +14,32 @@ class ToolConfig(BaseModel):
     Configuration for a tool.
     Config is static and is set when the tool is registered.
     """
+
     name: str = Field(description="The name of the tool")
     description: str = Field(description="The description of the tool")
-    input_model: Optional[Type[BaseModel]] = Field(default=None, description="The input model of the tool")
-    output_description: Optional[str] = Field(default=None, description="The output description of the tool")
-    output_model: Optional[Type[BaseModel]] = Field(default=None, description="The output model of the tool")
+    input_model: Optional[Type[BaseModel]] = Field(
+        default=None, description="The input model of the tool"
+    )
+    output_description: Optional[str] = Field(
+        default=None, description="The output description of the tool"
+    )
+    output_model: Optional[Type[BaseModel]] = Field(
+        default=None, description="The output model of the tool"
+    )
+    timeout_seconds: int = Field(
+        default=30, description="Timeout in seconds for the tool execution"
+    )
 
 
 class ToolContext(BaseModel):
     """
     Runtime context passed to tools.
 
-    The context carries per request metadata such as input payload, timeout, and metadata.
+    The context carries per request metadata such as input payload
     Context is dynamic and is set when the tool is called.
     """
 
     input: Dict[str, Any] = Field(default_factory=dict)
-    timeout_seconds: int = Field(
-        default=30, description="Timeout in seconds for the tool execution"
-    )
 
     def with_input(self, payload: Dict[str, Any]) -> "ToolContext":
         """
