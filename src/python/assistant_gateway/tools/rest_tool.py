@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Type
 from urllib.parse import urljoin
 import httpx
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import BaseModel, Field, ValidationError, create_model, model_validator
 from copy import deepcopy
 
 from assistant_gateway.errors import ToolExecutionError
@@ -12,30 +12,66 @@ from assistant_gateway.tools.base import Tool, ToolContext, ToolConfig
 
 
 class RESTToolConfig(ToolConfig):
-    """ "
-    Configuration for a REST tool. It extends the ToolConfig class, and adds a backend_url field.
+    """
+    Configuration for a REST tool. It extends the ToolConfig class.
+    """
+
+    pass
+
+
+class RestToolContextInputOverrides(BaseModel):
+    """
+    Input overrides to be applied to the ToolContext input.
     """
 
     backend_url: Optional[str] = Field(
         default=None,
-        description="The base URL of the backend server. If not provided, the base URL will be taken during runtime from the ToolContext.",
-    )
-
-
-class RestToolContext(ToolContext):
-    """
-    Context for a REST tool. It extends the ToolContext class, and adds a base_url field.
-    """
-
-    backend_url: Optional[str] = Field(
-        default=None,
-        description="Override the default base URL supplied via dynamic ToolContext.input or RESTToolConfig.",
+        description="Override the backend URL supplied via dynamic ToolContext.input",
     )
 
     default_headers: Dict[str, str] = Field(
         default_factory=dict,
         description="Default headers to include with the request. If not provided, the default headers will be taken during runtime from the ToolContext.",
     )
+
+
+class RestToolContext(ToolContext):
+    """
+    Context for a REST tool. It extends the ToolContext class, and adds a input_overrides field.
+
+    The input_overrides are automatically applied to the input field whenever the context
+    is created or cloned via with_input().
+    """
+
+    input_overrides: RestToolContextInputOverrides = Field(
+        default=RestToolContextInputOverrides(),
+        description="Input overrides to be applied to the ToolContext input",
+    )
+
+    @model_validator(mode="after")
+    def apply_input_overrides(self) -> "RestToolContext":
+        """
+        Apply input_overrides to the input dict after model creation.
+
+        This ensures that whenever the context is accessed, the input already
+        has the overrides applied (backend_url fallback, merged headers).
+        """
+        # Make a copy to avoid mutating the original input dict
+        merged_input = deepcopy(self.input)
+
+        # Apply backend_url override if not already set in input
+        if self.input_overrides.backend_url and not merged_input.get("backend_url"):
+            merged_input["backend_url"] = self.input_overrides.backend_url
+
+        # Merge default_headers with input headers (input headers take precedence)
+        if self.input_overrides.default_headers:
+            merged_input["headers"] = {
+                **self.input_overrides.default_headers,
+                **merged_input.get("headers", {}),
+            }
+
+        self.input = merged_input
+        return self
 
     def with_input(self, payload: Dict[str, Any]) -> "RestToolContext":
         """
@@ -44,13 +80,12 @@ class RestToolContext(ToolContext):
         This avoids mutating the shared context when multiple tools are called
         within the same agent turn.
         """
-
         data = deepcopy(self.model_dump())
         data["input"] = payload
         return RestToolContext(**data)
 
 
-class _DefaultRESTQueryAndPayloadModel(BaseModel):
+class DefaultRESTQueryAndPayloadModel(BaseModel):
     """
     Default model for the query and payload parameters to be passed inside the input of the ToolContext during runtime for a REST tool.
     """
@@ -58,29 +93,29 @@ class _DefaultRESTQueryAndPayloadModel(BaseModel):
     pass
 
 
-class _BaseRESTToolInput(BaseModel):
+class BaseRESTToolInput(BaseModel):
     """
     Model for the input to be passsed inside the ToolContext during runtime for a REST tool.
     """
 
     path: str = Field(description="Path relative to the CRUD base URL, e.g. /todos")
     method: str = Field(description="HTTP method: GET, POST, PUT, PATCH, DELETE")
-    query: Optional[_DefaultRESTQueryAndPayloadModel] = Field(
-        default=_DefaultRESTQueryAndPayloadModel(),
+    query: Optional[DefaultRESTQueryAndPayloadModel] = Field(
+        default=DefaultRESTQueryAndPayloadModel(),
         description="Query string parameters to include with the request. Must be a Pydantic model.",
     )
-    json: Optional[_DefaultRESTQueryAndPayloadModel] = Field(
-        default=_DefaultRESTQueryAndPayloadModel(),
+    json: Optional[DefaultRESTQueryAndPayloadModel] = Field(
+        default=DefaultRESTQueryAndPayloadModel(),
         description="JSON payload to include with the request. Must be a Pydantic model.",
     )
-    data: Optional[_DefaultRESTQueryAndPayloadModel] = Field(
-        default=_DefaultRESTQueryAndPayloadModel(),
+    data: Optional[DefaultRESTQueryAndPayloadModel] = Field(
+        default=DefaultRESTQueryAndPayloadModel(),
         description="Form data to include with the request. Must be a Pydantic model.",
     )
     headers: Dict[str, str] = Field(default_factory=dict)
     backend_url: Optional[str] = Field(
         default=None,
-        description="Override the default backend URL supplied via dynamic ToolContext.input or RESTToolConfig.",
+        description="The backend URL supplied inside the ToolContext input",
     )
 
 
@@ -89,13 +124,14 @@ class RESTTool(Tool):
         self,
         name: str,
         description: str,
+        timeout_seconds: int = 30,
         *,
-        backend_url: Optional[str] = None,
         query_params_model: Optional[Type[BaseModel]] = None,
         data_payload_model: Optional[Type[BaseModel]] = None,
         json_payload_model: Optional[Type[BaseModel]] = None,
         output_model: Optional[Type[BaseModel]] = None,
     ) -> None:
+        self._timeout_seconds = timeout_seconds
         self._query_params_model = query_params_model
         self._data_payload_model = data_payload_model
         self._json_payload_model = json_payload_model
@@ -116,7 +152,7 @@ class RESTTool(Tool):
             input_model=self._input_model,
             output_description=f"{RESTTool.get_output_description(output_model)}",
             output_model=output_model,
-            backend_url=backend_url,
+            timeout_seconds=timeout_seconds,
         )
 
         super().__init__(self._config)
@@ -128,24 +164,19 @@ class RESTTool(Tool):
             raise ToolExecutionError(f"{self.name}: invalid input: {e}") from e
 
         assert isinstance(
-            parsed_input, _BaseRESTToolInput
-        ), f"parsed input is not a _BaseRESTToolInput: {parsed_input}"
+            parsed_input, BaseRESTToolInput
+        ), f"parsed input is not a BaseRESTToolInput: {parsed_input}"
 
-        backend_url = (
-            parsed_input.backend_url or context.backend_url or self._config.backend_url
-        )
+        backend_url = parsed_input.backend_url
         if not backend_url:
             raise ToolExecutionError(
                 f"{self.name}: missing backend_url. Provide one in ToolContext or the tool input."
             )
         backend_url = str(backend_url)
-        
+
         url = urljoin(backend_url.rstrip("/") + "/", parsed_input.path.lstrip("/"))
         method = parsed_input.method.upper()
-        headers = {
-            **context.default_headers,
-            **parsed_input.headers,
-        }
+        headers = parsed_input.headers
         query_params = self.serialize_params_for_request(
             parsed_input.query, self._query_params_model
         )
@@ -156,7 +187,7 @@ class RESTTool(Tool):
             parsed_input.data, self._data_payload_model
         )
 
-        timeout = httpx.Timeout(context.timeout_seconds)
+        timeout = httpx.Timeout(self._config.timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
                 response = await client.request(
@@ -193,7 +224,7 @@ class RESTTool(Tool):
     @classmethod
     def serialize_params_for_request(
         cls,
-        payload: _DefaultRESTQueryAndPayloadModel | Dict[str, Any] | None,
+        payload: DefaultRESTQueryAndPayloadModel | Dict[str, Any] | None,
         payload_model: Optional[Type[BaseModel]] = None,
     ) -> Dict[str, Any]:
         if payload is None:
@@ -231,7 +262,7 @@ class RESTTool(Tool):
         class_name = f"{cls.__name__}Input_{sanitized_name}"
         return create_model(
             class_name,
-            __base__=_BaseRESTToolInput,
+            __base__=BaseRESTToolInput,
             **(
                 {
                     "query": (

@@ -16,7 +16,7 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
     ChatMetadata,
     ChatStatus,
     StoredAgentInteraction,
-    StoredAssistantOutput,
+    StoredAgentOutput,
     StoredUserInput,
     TaskStatus,
     UserContext,
@@ -158,7 +158,7 @@ class ConversationOrchestrator:
             return
 
         now = datetime.now(timezone.utc)
-        stored_response = StoredAssistantOutput(
+        stored_response = StoredAgentOutput(
             **response.model_dump(),
             id=str(uuid4()),
             created_at=now,
@@ -234,14 +234,14 @@ class ConversationOrchestrator:
     def _coerce_stored_interaction(
         self, interaction: StoredAgentInteraction
     ) -> StoredAgentInteraction:
-        if isinstance(interaction, (StoredUserInput, StoredAssistantOutput)):
+        if isinstance(interaction, (StoredUserInput, StoredAgentOutput)):
             return interaction
 
         if isinstance(interaction, AgentOutput):
             # Backward-compatibility: convert legacy AgentOutput instances persisted before
-            # StoredAssistantOutput was introduced.
+            # StoredAgentOutput was introduced.
             created_at = getattr(interaction, "created_at", datetime.now(timezone.utc))
-            return StoredAssistantOutput(
+            return StoredAgentOutput(
                 **interaction.model_dump(),
                 id=getattr(interaction, "id", str(uuid4())),
                 created_at=created_at,
