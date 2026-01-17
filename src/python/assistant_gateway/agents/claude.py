@@ -28,11 +28,6 @@ class ClaudeBaseAgent(Agent):
     infrastructure for translating registry entries into ``@tool``-decorated
     callables lives here.
     """
-
-    def __init__(self, api_key: Optional[str]) -> None:
-        super().__init__()
-        self.api_key = api_key
-
     def get_mcp_server_options(self) -> ClaudeAgentOptions:
         """
         Get the MCP server options for the Claude agent.
@@ -48,7 +43,7 @@ class ClaudeBaseAgent(Agent):
         name: str,
         version: str,
         tool_registry: ToolRegistry,
-        predefined_tool_context: ToolContext,
+        agent_level_input_overrides: Optional[Dict[str, Any]] = None,
     ) -> Tuple[McpSdkServerConfig, List[Callable]]:
         """
         Translate the registry into Claude SDK ``@tool`` callables and register
@@ -56,7 +51,7 @@ class ClaudeBaseAgent(Agent):
 
         Args:
                 tool_registry: The tool registry to use.
-                predefined_tool_context: The global tool context to use.
+                agent_level_input_overrides: The agent level input overrides to use.
 
         Returns:
                 A tuple containing the MCP server and the tool functions.
@@ -64,7 +59,7 @@ class ClaudeBaseAgent(Agent):
         from claude_agent_sdk import create_sdk_mcp_server
 
         tool_functions = [
-            cls._wrap_tool_for_claude(tool, predefined_tool_context)
+            cls._wrap_tool_for_claude(tool, agent_level_input_overrides)
             for tool in tool_registry.all()
         ]
         server = create_sdk_mcp_server(
@@ -77,7 +72,7 @@ class ClaudeBaseAgent(Agent):
     async def run(self, interactions: List[AgentInteraction]) -> AgentOutput:
         mcp_server_options = self.get_mcp_server_options()
 
-        print('interactions inside claude base agent', interactions)
+        print("interactions inside claude base agent", interactions)
 
         # Convert messages to Claude SDK format
         # Extract content using helper method that handles different AgentInteraction subclasses
@@ -94,7 +89,7 @@ class ClaudeBaseAgent(Agent):
 
         prompt = claude_messages[-1]["content"] if claude_messages else ""
 
-        print('prompt inside claude base agent', prompt)
+        print("prompt inside claude base agent", prompt)
 
         # Call Claude with the configured MCP server options using ClaudeSDKClient
         # Collect all messages from the stream for proper parsing
@@ -104,7 +99,7 @@ class ClaudeBaseAgent(Agent):
             async for message in client.receive_response():
                 all_messages.append(message)
 
-        print('all_messages inside claude base agent', all_messages)
+        print("all_messages inside claude base agent", all_messages)
 
         # Parse all messages into message, steps and result text in order to return an AgentOutput
         assistant_messages: List[str] = []
@@ -357,7 +352,9 @@ class ClaudeBaseAgent(Agent):
         return ClaudeBaseAgent._has_attr_or_key(block, "tool_use_id")
 
     @classmethod
-    def _wrap_tool_for_claude(cls, tool: Tool, predefined_tool_context: ToolContext):
+    def _wrap_tool_for_claude(
+        cls, tool: Tool, agent_level_input_overrides: Optional[Dict[str, Any]] = None
+    ):
         from claude_agent_sdk import tool as claude_tool_decorator
 
         tool_input_schema = cls._build_input_schema(tool)
@@ -365,8 +362,10 @@ class ClaudeBaseAgent(Agent):
 
         @claude_tool_decorator(tool.name, tool.config.description, tool_input_schema)
         async def _invoke(args: Dict[str, Any]):
-            tool_context_with_input = predefined_tool_context.with_input(args)
-            result = await tool.run(tool_context_with_input)
+            tool_context = ToolContext(input=args).apply_input_overrides(
+                agent_level_input_overrides
+            )
+            result = await tool.execute(tool_context)
             output = result.output
             if isinstance(output, str):
                 text = output
