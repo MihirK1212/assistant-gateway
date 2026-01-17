@@ -20,14 +20,20 @@ class ToolConfig(BaseModel):
     input_model: Optional[Type[BaseModel]] = Field(
         default=None, description="The input model of the tool"
     )
-    output_description: Optional[str] = Field(
-        default=None, description="The output description of the tool"
+    input_description: Optional[str] = Field(
+        default=None, description="The input description of the tool"
     )
     output_model: Optional[Type[BaseModel]] = Field(
         default=None, description="The output model of the tool"
     )
+    output_description: Optional[str] = Field(
+        default=None, description="The output description of the tool"
+    )
     timeout_seconds: int = Field(
         default=30, description="Timeout in seconds for the tool execution"
+    )
+    tool_level_input_overrides: Optional[Dict[str, Any]] = Field(
+        default=None, description="Input overrides for the tool"
     )
 
 
@@ -53,6 +59,19 @@ class ToolContext(BaseModel):
         data["input"] = payload
         return ToolContext(**data)
 
+    def apply_input_overrides(self, input_overrides: dict[str, Any]) -> "ToolContext":
+        """
+        Apply input overrides to the input dict.
+        """
+        if not isinstance(input_overrides, dict) or not input_overrides:
+            return self
+
+        self.input = {
+            **self.input,
+            **input_overrides,
+        }
+        return self
+
 
 class Tool(ABC):
     def __init__(self, config: ToolConfig):
@@ -62,8 +81,20 @@ class Tool(ABC):
     def name(self) -> str:
         return self.config.name
 
+    async def execute(self, context: ToolContext) -> ToolResult:
+        """
+        Execute the tool with the given context.
+        The execute method applies the tool-level input overrides to the context.
+        """
+        context = context.apply_input_overrides(self.config.tool_level_input_overrides)
+        return await self.run(context)
+
     @abstractmethod
     async def run(self, context: ToolContext) -> ToolResult:
+        """
+        Never call this method directly. Use the execute method instead.
+        The execute method applies the tool-level input overrides to the context.
+        """
         raise NotImplementedError(
             "The run method must be implemented by the subclass for a Tool"
         )

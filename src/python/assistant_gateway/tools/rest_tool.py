@@ -11,80 +11,6 @@ from assistant_gateway.schemas import ToolResult
 from assistant_gateway.tools.base import Tool, ToolContext, ToolConfig
 
 
-class RESTToolConfig(ToolConfig):
-    """
-    Configuration for a REST tool. It extends the ToolConfig class.
-    """
-
-    pass
-
-
-class RestToolContextInputOverrides(BaseModel):
-    """
-    Input overrides to be applied to the ToolContext input.
-    """
-
-    backend_url: Optional[str] = Field(
-        default=None,
-        description="Override the backend URL supplied via dynamic ToolContext.input",
-    )
-
-    default_headers: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Default headers to include with the request. If not provided, the default headers will be taken during runtime from the ToolContext.",
-    )
-
-
-class RestToolContext(ToolContext):
-    """
-    Context for a REST tool. It extends the ToolContext class, and adds a input_overrides field.
-
-    The input_overrides are automatically applied to the input field whenever the context
-    is created or cloned via with_input().
-    """
-
-    input_overrides: RestToolContextInputOverrides = Field(
-        default=RestToolContextInputOverrides(),
-        description="Input overrides to be applied to the ToolContext input",
-    )
-
-    @model_validator(mode="after")
-    def apply_input_overrides(self) -> "RestToolContext":
-        """
-        Apply input_overrides to the input dict after model creation.
-
-        This ensures that whenever the context is accessed, the input already
-        has the overrides applied (backend_url fallback, merged headers).
-        """
-        # Make a copy to avoid mutating the original input dict
-        merged_input = deepcopy(self.input)
-
-        # Apply backend_url override if not already set in input
-        if self.input_overrides.backend_url and not merged_input.get("backend_url"):
-            merged_input["backend_url"] = self.input_overrides.backend_url
-
-        # Merge default_headers with input headers (input headers take precedence)
-        if self.input_overrides.default_headers:
-            merged_input["headers"] = {
-                **self.input_overrides.default_headers,
-                **merged_input.get("headers", {}),
-            }
-
-        self.input = merged_input
-        return self
-
-    def with_input(self, payload: Dict[str, Any]) -> "RestToolContext":
-        """
-        Return a cloned context embedding the tool-specific input payload.
-
-        This avoids mutating the shared context when multiple tools are called
-        within the same agent turn.
-        """
-        data = deepcopy(self.model_dump())
-        data["input"] = payload
-        return RestToolContext(**data)
-
-
 class DefaultRESTQueryAndPayloadModel(BaseModel):
     """
     Default model for the query and payload parameters to be passed inside the input of the ToolContext during runtime for a REST tool.
@@ -123,14 +49,16 @@ class RESTTool(Tool):
     def __init__(
         self,
         name: str,
-        description: str,
-        timeout_seconds: int = 30,
         *,
+        description: str,
         query_params_model: Optional[Type[BaseModel]] = None,
         data_payload_model: Optional[Type[BaseModel]] = None,
         json_payload_model: Optional[Type[BaseModel]] = None,
         output_model: Optional[Type[BaseModel]] = None,
+        timeout_seconds: int = 30,
+        tool_level_input_overrides: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self._tool_level_input_overrides = tool_level_input_overrides
         self._timeout_seconds = timeout_seconds
         self._query_params_model = query_params_model
         self._data_payload_model = data_payload_model
@@ -138,26 +66,29 @@ class RESTTool(Tool):
         self._output_model = output_model
 
         # build input model using query_params_model, data_payload_model, and json_payload_model
-        self._input_model = RESTTool.build_input_model(
+        input_model = RESTTool.build_input_model(
             name,
             query_params_model=query_params_model,
             data_payload_model=data_payload_model,
             json_payload_model=json_payload_model,
         )
+        self._input_model = input_model
 
         # build config using name, description, input model, output model, and backend_url
-        self._config = RESTToolConfig(
+        self._config = ToolConfig(
             name=name,
             description=description,
-            input_model=self._input_model,
-            output_description=f"{RESTTool.get_output_description(output_model)}",
+            input_model=input_model,
+            input_description=f"{RESTTool.get_field_description_from_model(input_model)}",
             output_model=output_model,
+            output_description=f"{RESTTool.get_field_description_from_model(output_model)}",
             timeout_seconds=timeout_seconds,
+            tool_level_input_overrides=tool_level_input_overrides,
         )
 
         super().__init__(self._config)
 
-    async def run(self, context: RestToolContext) -> ToolResult:
+    async def run(self, context: ToolContext) -> ToolResult:
         try:
             parsed_input = self._input_model(**context.input)
         except Exception as e:
@@ -305,13 +236,13 @@ class RESTTool(Tool):
         )
 
     @classmethod
-    def get_output_description(cls, output_model: Optional[Type[BaseModel]]) -> str:
-        if output_model is None:
+    def get_field_description_from_model(cls, model: Optional[Type[BaseModel]]) -> str:
+        if model is None:
             return "Arbitrary JSON response from the CRUD backend."
-        desc = f"Response validated by the tool-specific model: {output_model.__name__}"
-        if hasattr(output_model, "model_fields") and output_model.model_fields:
+        desc = f"Model description:"
+        if hasattr(model, "model_fields") and model.model_fields:
             field_descriptions = []
-            for name, field in output_model.model_fields.items():
+            for name, field in model.model_fields.items():
                 field_info = field.description or ""
                 field_str = f"{name}: {field_info}" if field_info else name
                 field_descriptions.append(field_str)
