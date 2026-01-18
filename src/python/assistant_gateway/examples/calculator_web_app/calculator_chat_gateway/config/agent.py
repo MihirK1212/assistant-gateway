@@ -17,6 +17,11 @@ from assistant_gateway.tools.rest_tool import RESTTool
 from typing import Any
 
 
+import os 
+import dotenv 
+
+dotenv.load_dotenv()
+
 # Query param models for calculator endpoints
 class TwoNumbersQueryParamsModel(BaseModel):
     a: float = Field(description="The first number")
@@ -192,6 +197,9 @@ def build_calculator_agent(
     """
 
     backend_url = "http://172.23.176.1:5000"
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    print("Anthropic API Key:", api_key)
 
     agent_level_input_overrides = {"backend_url": backend_url}
 
