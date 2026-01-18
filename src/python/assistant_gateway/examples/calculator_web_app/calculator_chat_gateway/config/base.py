@@ -13,6 +13,11 @@ from assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.confi
     build_calculator_agent,
 )
 
+import os 
+import dotenv 
+
+dotenv.load_dotenv()
+
 
 def build_gateway_config() -> GatewayConfig:
     """
