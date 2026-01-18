@@ -8,7 +8,8 @@ sys.path.append(os.path.dirname(os.path.dirname(CURRENT_DIR)))
 sys.path.append(os.path.dirname(CURRENT_DIR))
 sys.path.append(
     os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
-)  # repo root
+)  # repo root 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))))  # repo root
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
