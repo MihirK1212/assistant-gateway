@@ -43,37 +43,40 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap');
     
     :root {
-        --bg-primary: #0d0d12;
-        --bg-secondary: #16161d;
-        --bg-tertiary: #1e1e28;
-        --accent-cyan: #00d4aa;
-        --accent-magenta: #ff3366;
-        --accent-amber: #ffb800;
-        --text-primary: #e8e8ed;
-        --text-secondary: #9898a6;
-        --border-color: #2a2a3a;
+        --bg-primary: #fafbfc;
+        --bg-secondary: #ffffff;
+        --bg-tertiary: #f4f6f8;
+        --bg-hover: #eef1f4;
+        --accent-blue: #2563eb;
+        --accent-green: #059669;
+        --accent-orange: #d97706;
+        --accent-red: #dc2626;
+        --accent-purple: #7c3aed;
+        --text-primary: #1e293b;
+        --text-secondary: #64748b;
+        --text-muted: #94a3b8;
+        --border-color: #e2e8f0;
+        --border-focus: #93c5fd;
     }
     
     .stApp {
-        background: linear-gradient(145deg, var(--bg-primary) 0%, #0a0a10 100%);
+        background: var(--bg-primary);
     }
     
     .main-header {
-        font-family: 'Outfit', sans-serif;
-        font-size: 2.8rem;
+        font-family: 'DM Sans', sans-serif;
+        font-size: 2.4rem;
         font-weight: 700;
-        background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-amber) 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
+        color: var(--text-primary);
+        margin-bottom: 0.25rem;
         text-align: center;
     }
     
     .sub-header {
-        font-family: 'Outfit', sans-serif;
+        font-family: 'DM Sans', sans-serif;
         font-size: 1rem;
         color: var(--text-secondary);
         text-align: center;
@@ -82,154 +85,173 @@ st.markdown(
     
     .chat-container {
         background: var(--bg-secondary);
-        border-radius: 16px;
+        border-radius: 12px;
         padding: 1.5rem;
         margin-bottom: 1rem;
         border: 1px solid var(--border-color);
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
     }
     
     .user-message {
-        background: linear-gradient(135deg, #1a3a4a 0%, #1a2a3a 100%);
-        border-left: 3px solid var(--accent-cyan);
+        background: #eff6ff;
+        border-left: 3px solid var(--accent-blue);
         padding: 1rem 1.25rem;
-        border-radius: 12px;
+        border-radius: 8px;
         margin: 0.75rem 0;
-        font-family: 'Outfit', sans-serif;
+        font-family: 'DM Sans', sans-serif;
+        color: var(--text-primary);
     }
     
     .assistant-message {
-        background: linear-gradient(135deg, #2a1a3a 0%, #1a1a2a 100%);
-        border-left: 3px solid var(--accent-magenta);
+        background: #f0fdf4;
+        border-left: 3px solid var(--accent-green);
         padding: 1rem 1.25rem;
-        border-radius: 12px;
+        border-radius: 8px;
         margin: 0.75rem 0;
-        font-family: 'Outfit', sans-serif;
+        font-family: 'DM Sans', sans-serif;
+        color: var(--text-primary);
     }
     
     .tool-call-container {
-        background: var(--bg-tertiary);
-        border: 1px solid var(--accent-amber);
-        border-radius: 8px;
+        background: #fffbeb;
+        border: 1px solid #fcd34d;
+        border-radius: 6px;
         padding: 0.75rem 1rem;
         margin: 0.5rem 0;
-        font-family: 'JetBrains Mono', monospace;
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 0.85rem;
+        color: var(--text-primary);
     }
     
     .tool-name {
-        color: var(--accent-amber);
+        color: #b45309;
         font-weight: 600;
     }
     
+    .tool-input {
+        color: var(--text-secondary);
+        margin-top: 0.25rem;
+    }
+    
     .tool-result {
-        color: var(--accent-cyan);
+        color: #047857;
         margin-top: 0.5rem;
+        font-weight: 500;
     }
     
     .status-badge {
         display: inline-block;
         padding: 0.25rem 0.75rem;
-        border-radius: 20px;
+        border-radius: 6px;
         font-size: 0.75rem;
         font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.03em;
     }
     
     .status-pending {
-        background: rgba(255, 184, 0, 0.2);
-        color: var(--accent-amber);
-        border: 1px solid var(--accent-amber);
+        background: #fef3c7;
+        color: #92400e;
+        border: 1px solid #fcd34d;
     }
     
     .status-completed {
-        background: rgba(0, 212, 170, 0.2);
-        color: var(--accent-cyan);
-        border: 1px solid var(--accent-cyan);
+        background: #d1fae5;
+        color: #065f46;
+        border: 1px solid #6ee7b7;
     }
     
     .status-failed {
-        background: rgba(255, 51, 102, 0.2);
-        color: var(--accent-magenta);
-        border: 1px solid var(--accent-magenta);
+        background: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fca5a5;
     }
     
     .status-in-progress {
-        background: rgba(100, 100, 255, 0.2);
-        color: #6464ff;
-        border: 1px solid #6464ff;
+        background: #dbeafe;
+        color: #1e40af;
+        border: 1px solid #93c5fd;
     }
     
     .sidebar-info {
         background: var(--bg-tertiary);
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 1rem;
         margin: 0.5rem 0;
         border: 1px solid var(--border-color);
     }
     
     .stTextInput > div > div > input {
-        background-color: var(--bg-tertiary) !important;
+        background-color: var(--bg-secondary) !important;
         border: 1px solid var(--border-color) !important;
-        border-radius: 10px !important;
+        border-radius: 8px !important;
         color: var(--text-primary) !important;
-        font-family: 'Outfit', sans-serif !important;
+        font-family: 'DM Sans', sans-serif !important;
     }
     
     .stTextInput > div > div > input:focus {
-        border-color: var(--accent-cyan) !important;
-        box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.2) !important;
+        border-color: var(--accent-blue) !important;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
     }
     
     .stButton > button {
-        background: linear-gradient(135deg, var(--accent-cyan) 0%, #00a080 100%) !important;
-        color: var(--bg-primary) !important;
+        background: var(--accent-blue) !important;
+        color: white !important;
         border: none !important;
-        border-radius: 10px !important;
-        font-family: 'Outfit', sans-serif !important;
+        border-radius: 8px !important;
+        font-family: 'DM Sans', sans-serif !important;
         font-weight: 600 !important;
         padding: 0.5rem 1.5rem !important;
-        transition: all 0.3s ease !important;
+        transition: all 0.2s ease !important;
     }
     
     .stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 4px 12px rgba(0, 212, 170, 0.3) !important;
+        background: #1d4ed8 !important;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25) !important;
     }
     
     .stRadio > div {
         background: var(--bg-tertiary);
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 0.5rem;
     }
     
     .stRadio label {
         color: var(--text-primary) !important;
-        font-family: 'Outfit', sans-serif !important;
+        font-family: 'DM Sans', sans-serif !important;
     }
     
     .info-card {
-        background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
-        border-radius: 12px;
+        background: var(--bg-secondary);
+        border-radius: 8px;
         padding: 1rem;
         border: 1px solid var(--border-color);
         margin: 0.5rem 0;
     }
     
     .metric-value {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 1.5rem;
-        color: var(--accent-cyan);
-        font-weight: 700;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 1.25rem;
+        color: var(--accent-blue);
+        font-weight: 600;
     }
     
     .metric-label {
-        font-family: 'Outfit', sans-serif;
-        font-size: 0.85rem;
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.8rem;
         color: var(--text-secondary);
         text-transform: uppercase;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.25rem;
+    }
+    
+    /* Make sidebar readable */
+    [data-testid="stSidebar"] {
+        background: var(--bg-secondary);
+    }
+    
+    [data-testid="stSidebar"] .sidebar-info {
+        color: var(--text-primary);
     }
 </style>
 """,
@@ -309,7 +331,7 @@ def poll_task_until_complete(
                     f"""
                     <div class="info-card">
                         <span class="status-badge status-pending">⏳ Pending</span>
-                        <span style="margin-left: 1rem; color: var(--text-secondary);">
+                        <span style="margin-left: 1rem; color: #64748b;">
                             Waiting in queue... (Poll {i+1}/{max_polls})
                         </span>
                     </div>
@@ -321,7 +343,7 @@ def poll_task_until_complete(
                     f"""
                     <div class="info-card">
                         <span class="status-badge status-in-progress">🔄 In Progress</span>
-                        <span style="margin-left: 1rem; color: var(--text-secondary);">
+                        <span style="margin-left: 1rem; color: #64748b;">
                             Processing your request... (Poll {i+1}/{max_polls})
                         </span>
                     </div>
@@ -333,7 +355,7 @@ def poll_task_until_complete(
                     """
                     <div class="info-card">
                         <span class="status-badge status-completed">✓ Completed</span>
-                        <span style="margin-left: 1rem; color: var(--text-secondary);">
+                        <span style="margin-left: 1rem; color: #64748b;">
                             Task finished successfully!
                         </span>
                     </div>
@@ -347,7 +369,7 @@ def poll_task_until_complete(
                     f"""
                     <div class="info-card">
                         <span class="status-badge status-failed">✗ Failed</span>
-                        <span style="margin-left: 1rem; color: var(--text-secondary);">
+                        <span style="margin-left: 1rem; color: #64748b;">
                             {error_msg}
                         </span>
                     </div>
@@ -383,7 +405,7 @@ def render_tool_calls(steps: list) -> str:
             html_parts.append(f"""
             <div class="tool-call-container">
                 <div class="tool-name">🔧 {tool_name}</div>
-                <div style="color: var(--text-secondary); margin-top: 0.25rem;">
+                <div style="color: #64748b; margin-top: 0.25rem;">
                     Input: {tool_input}
                 </div>
                 <div class="tool-result">
@@ -404,7 +426,7 @@ def render_interaction(interaction: dict) -> None:
         st.markdown(
             f"""
             <div class="user-message">
-                <strong style="color: var(--accent-cyan);">You:</strong><br/>
+                <strong style="color: #1d4ed8;">You:</strong><br/>
                 {content}
             </div>
             """,
@@ -423,7 +445,7 @@ def render_interaction(interaction: dict) -> None:
         st.markdown(
             f"""
             <div class="assistant-message">
-                <strong style="color: var(--accent-magenta);">🤖 Calculator Agent:</strong><br/>
+                <strong style="color: #047857;">🤖 Calculator Agent:</strong><br/>
                 {display_text}
                 {tool_calls_html}
             </div>
@@ -437,9 +459,9 @@ def render_chat_history(interactions: list) -> None:
     if not interactions:
         st.markdown(
             """
-            <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+            <div style="text-align: center; padding: 3rem; color: #64748b;">
                 <div style="font-size: 3rem; margin-bottom: 1rem;">💬</div>
-                <div style="font-family: 'Outfit', sans-serif;">
+                <div style="font-family: 'DM Sans', sans-serif;">
                     Start a conversation by typing a message below!
                 </div>
             </div>
@@ -478,7 +500,7 @@ with st.sidebar:
         f"""
         <div class="sidebar-info">
             <div class="metric-label">Gateway URL</div>
-            <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-primary); word-break: break-all;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; color: #1e293b; word-break: break-all;">
                 {GATEWAY_BASE_URL}
             </div>
         </div>
@@ -491,7 +513,7 @@ with st.sidebar:
             f"""
             <div class="sidebar-info">
                 <div class="metric-label">Active Chat</div>
-                <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--accent-cyan); word-break: break-all;">
+                <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: #2563eb; word-break: break-all;">
                     {st.session_state.chat_id}
                 </div>
             </div>
@@ -539,13 +561,13 @@ with st.sidebar:
     st.markdown("### 📚 Available Operations")
     st.markdown(
         """
-        <div class="sidebar-info" style="font-size: 0.85rem;">
-            <div style="margin-bottom: 0.5rem;"><strong style="color: var(--accent-cyan);">add</strong> - Add two numbers</div>
-            <div style="margin-bottom: 0.5rem;"><strong style="color: var(--accent-cyan);">multiply</strong> - Multiply two numbers</div>
-            <div style="margin-bottom: 0.5rem;"><strong style="color: var(--accent-cyan);">divide</strong> - Divide numbers</div>
-            <div style="margin-bottom: 0.5rem;"><strong style="color: var(--accent-amber);">mihir_custom_transform</strong> - a × 28 + 12</div>
-            <div style="margin-bottom: 0.5rem;"><strong style="color: var(--accent-amber);">mihir_custom_series</strong> - [a-2, a-1, a, a+1, a+2]</div>
-            <div><strong style="color: var(--accent-magenta);">mihir_custom_log</strong> - Log a message</div>
+        <div class="sidebar-info" style="font-size: 0.85rem; color: #1e293b;">
+            <div style="margin-bottom: 0.5rem;"><strong style="color: #2563eb;">add</strong> - Add two numbers</div>
+            <div style="margin-bottom: 0.5rem;"><strong style="color: #2563eb;">multiply</strong> - Multiply two numbers</div>
+            <div style="margin-bottom: 0.5rem;"><strong style="color: #2563eb;">divide</strong> - Divide numbers</div>
+            <div style="margin-bottom: 0.5rem;"><strong style="color: #d97706;">mihir_custom_transform</strong> - a × 28 + 12</div>
+            <div style="margin-bottom: 0.5rem;"><strong style="color: #d97706;">mihir_custom_series</strong> - [a-2, a-1, a, a+1, a+2]</div>
+            <div><strong style="color: #7c3aed;">mihir_custom_log</strong> - Log a message</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -562,10 +584,10 @@ with col1:
             """
             <div style="text-align: center; padding: 4rem 2rem;">
                 <div style="font-size: 4rem; margin-bottom: 1.5rem;">🧮</div>
-                <h3 style="font-family: 'Outfit', sans-serif; color: var(--text-primary); margin-bottom: 1rem;">
+                <h3 style="font-family: 'DM Sans', sans-serif; color: #1e293b; margin-bottom: 1rem;">
                     Welcome to Calculator Agent Chat
                 </h3>
-                <p style="color: var(--text-secondary); font-family: 'Outfit', sans-serif;">
+                <p style="color: #64748b; font-family: 'DM Sans', sans-serif;">
                     Click <strong>"New Chat"</strong> in the sidebar to start a conversation with the calculator agent.
                 </p>
             </div>
@@ -701,7 +723,7 @@ with col2:
                 f"""
                 <div class="info-card">
                     <div class="metric-label">Created</div>
-                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-primary);">
+                    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; color: #1e293b;">
                         {created_at}
                     </div>
                 </div>
@@ -730,7 +752,7 @@ with col2:
                         f"""
                         <div class="info-card">
                             <span class="status-badge {status_class}">{task_status.upper()}</span>
-                            <div style="margin-top: 0.5rem; font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--text-secondary); word-break: break-all;">
+                            <div style="margin-top: 0.5rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #64748b; word-break: break-all;">
                                 {last_task_id[:20]}...
                             </div>
                         </div>
@@ -747,7 +769,7 @@ with col2:
             """
             <div class="info-card" style="text-align: center; padding: 2rem;">
                 <div style="font-size: 2rem; margin-bottom: 0.5rem;">📭</div>
-                <div style="color: var(--text-secondary); font-family: 'Outfit', sans-serif;">
+                <div style="color: #64748b; font-family: 'DM Sans', sans-serif;">
                     No active chat
                 </div>
             </div>
@@ -787,7 +809,7 @@ if st.session_state.chat_id:
 st.markdown("---")
 st.markdown(
     """
-    <div style="text-align: center; padding: 1rem; color: var(--text-secondary); font-family: 'Outfit', sans-serif; font-size: 0.85rem;">
+    <div style="text-align: center; padding: 1rem; color: #64748b; font-family: 'DM Sans', sans-serif; font-size: 0.85rem;">
         Calculator Agent Gateway Demo • Built with Streamlit & FastAPI
     </div>
     """,
