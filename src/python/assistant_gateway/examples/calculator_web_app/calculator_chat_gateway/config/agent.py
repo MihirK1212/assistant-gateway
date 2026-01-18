@@ -43,7 +43,7 @@ class ArithmeticResultOutputModel(BaseModel):
 
 class CustomSeriesOutputModel(BaseModel):
     series: List[float] = Field(
-        description="The generated series [a-2, a-1, a, a+1, a+2]"
+        description="The generated custom mihir series"
     )
 
 
@@ -107,7 +107,7 @@ class MihirCustomSeriesRESTTool(RESTTool):
         super().__init__(
             name="mihir_custom_series",
             description=(
-                "Generate Mihir's custom series from a number: returns [a-2, a-1, a, a+1, a+2]. "
+                "Generate Mihir's custom series from a number "
                 "Endpoint: GET /mihir_custom_series?a={a}"
             ),
             query_params_model=SingleNumberQueryParamsModel,
