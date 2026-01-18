@@ -28,7 +28,7 @@ def build_gateway_config() -> GatewayConfig:
     """
 
     default_fallback = GatewayDefaultFallbackConfig(
-        fallback_backend_url="http://127.0.0.1:5000/docs"
+        fallback_backend_url="http://127.0.0.1:5000"
     )
 
     return GatewayConfig(

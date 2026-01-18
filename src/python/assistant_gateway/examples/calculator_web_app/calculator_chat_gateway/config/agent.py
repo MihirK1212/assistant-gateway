@@ -196,7 +196,7 @@ def build_calculator_agent(
     Create a calculator agent using dynamic inputs supplied by the orchestrator.
     """
 
-    backend_url = "http://127.0.0.1:5000/docs"
+    backend_url = "http://127.0.0.1:5000"
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     print("Anthropic API Key:", api_key)
