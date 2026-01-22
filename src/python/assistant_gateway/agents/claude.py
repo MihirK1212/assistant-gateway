@@ -228,7 +228,7 @@ class ClaudeBaseAgent(Agent):
 
         Handles:
         - UserInput: has .content attribute
-        - StoredAgentInteraction: has metadata['content']
+        - AgentInteraction: has metadata['content']
         - Other AgentInteraction subclasses: check for content in metadata or direct attribute
         """
         # Check if it's a UserInput with direct content attribute
@@ -250,7 +250,7 @@ class ClaudeBaseAgent(Agent):
             if final_text:
                 return cls._stringify(final_text)
 
-        # Check for content in metadata (StoredAgentInteraction pattern)
+        # Check for content in metadata (AgentInteraction pattern)
         if hasattr(interaction, "metadata") and isinstance(interaction.metadata, dict):
             content = interaction.metadata.get("content")
             if content is not None:
