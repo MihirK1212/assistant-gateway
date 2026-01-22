@@ -7,9 +7,7 @@ from pydantic import BaseModel, Field
 
 from assistant_gateway.schemas import AgentOutput, AgentInteraction
 from assistant_gateway.chat_orchestrator.core.schemas import (
-    AgentTask,
     BackgroundAgentTask,
-    BackgroundTask,  # Alias for backward compatibility
     SynchronousAgentTask,
     ChatMetadata,
     BackendServerContext,
@@ -17,7 +15,7 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
 )
 
 
-class RunMode(str, Enum):
+class RunMode(str, Enum):   
     sync = "sync"
     background = "background"
 
