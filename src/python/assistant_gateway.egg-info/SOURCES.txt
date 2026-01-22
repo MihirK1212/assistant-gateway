@@ -1,8 +1,4 @@
 pyproject.toml
-src/python/assistant_gateway.egg-info/PKG-INFO
-src/python/assistant_gateway.egg-info/SOURCES.txt
-src/python/assistant_gateway.egg-info/dependency_links.txt
-src/python/assistant_gateway.egg-info/top_level.txt
 src/python/assistant_gateway/__init__.py
 src/python/assistant_gateway/errors.py
 src/python/assistant_gateway/schemas.py
