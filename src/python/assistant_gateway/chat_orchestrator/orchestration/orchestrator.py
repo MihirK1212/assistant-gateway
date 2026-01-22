@@ -440,8 +440,7 @@ class ConversationOrchestrator:
             return
 
         stored_agent_response = AgentOutput(
-            **response.model_dump(),
-            metadata={},
+            **response.model_dump()
         )
         await self._chat_store.append_interaction(chat_id, stored_agent_response)
 
