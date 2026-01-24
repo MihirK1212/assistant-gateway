@@ -121,9 +121,9 @@ class MihirCustomLogRESTTool(RESTTool):
             name="mihir_custom_log",
             description=(
                 "Log a message to the logs file. "
-                "Endpoint: POST /mihir_custom_log?message={message}"
+                "Endpoint: POST /mihir_custom_log?message=hello%20from%20original%20swagger"
             ),
-            data_payload_model=LogMessageQueryParamsModel,
+            query_params_model=LogMessageQueryParamsModel,
             output_model=LogOutputModel,
         )
 
