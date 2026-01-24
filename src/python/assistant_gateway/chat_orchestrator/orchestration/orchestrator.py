@@ -47,7 +47,7 @@ class ConversationOrchestrator:
         self._config = config
         self._chat_store = self._config.get_chat_store()
         self._queue_manager = self._config.get_queue_manager()
-        self._task_scheduler = TaskManager(self._queue_manager)
+        self._task_manager = TaskManager(self._queue_manager)
         self._chat_locks: Dict[str, asyncio.Lock] = {}
 
         agent_configs = self._config.get_agent_configs()
@@ -152,7 +152,7 @@ class ConversationOrchestrator:
         Get a task by ID.
         """
 
-        task = await self._task_scheduler.get_task(task_id)
+        task = await self._task_manager.get_task(task_id)
         if task and task.chat_id == chat_id:
             return task
 
@@ -164,21 +164,29 @@ class ConversationOrchestrator:
         self, chat_id: str, task_id: str
     ) -> Union[SynchronousAgentTask, BackgroundAgentTask]:
         """
-        Interrupt a task.
-        """
+        Interrupt a task and clear it from the chat's current task if applicable.
 
-        # Step 1: Get the task
+        Args:
+            chat_id: The chat ID
+            task_id: The task ID to interrupt
+
+        Returns:
+            The interrupted task
+
+        Raises:
+            HTTPException 404: If task not found
+        """
+        # Validate task exists and belongs to this chat
         existing_task = await self.get_task(chat_id, task_id)
 
-        # Step 2: Interrupt the task
-        task = await self._task_scheduler.interrupt_task(existing_task.id)
+        # Interrupt the task
+        task = await self._task_manager.interrupt_task(existing_task.id)
 
-        # Step 3: Update chat's current task if this was the current task
+        # Clear current task reference if this was the active task
         chat = await self.get_chat(chat_id)
         if chat.current_task_id == task_id:
             chat.current_task_id = None
-            chat.updated_at = datetime.now(timezone.utc)
-            await self._chat_store.update_chat(chat)
+            await self._update_chat_timestamp(chat)
 
         return task
 
@@ -215,14 +223,24 @@ class ConversationOrchestrator:
     async def _create_and_add_user_input_to_chat(
         self, chat: ChatMetadata, content: str, message_metadata: Optional[Dict] = None
     ) -> UserInput:
+        """
+        Create a user input and append it to the chat's interactions.
+
+        Args:
+            chat: The chat to add the input to
+            content: The message content
+            message_metadata: Optional metadata for the message
+
+        Returns:
+            The created UserInput
+        """
         user_input = UserInput(
             role=Role.user,
             content=content,
             metadata=message_metadata or {},
         )
         await self._chat_store.append_interaction(chat.chat_id, user_input)
-        chat.updated_at = datetime.now(timezone.utc)
-        await self._chat_store.update_chat(chat)
+        await self._update_chat_timestamp(chat)
         return user_input
 
     async def _run_agent_using_all_interactions(
@@ -235,16 +253,26 @@ class ConversationOrchestrator:
         """
         Run the agent for all interactions in the chat.
 
-        Ensure that the last interaction is a user input
-        Then, based on the run_in_background flag, create and execute/enqueue a sync or background task
+        Validates that the last interaction is a user input, then creates and
+        executes/enqueues a task based on the run_in_background flag.
+
+        Args:
+            chat: The chat metadata
+            user_context: Optional user context for the agent
+            backend_server_context: Optional backend server context
+            run_in_background: If True, enqueue for background execution
+
+        Returns:
+            Tuple of (chat, response, task)
         """
+        # Re-fetch chat to ensure we have the latest state after adding user input
         chat = await self.get_chat(chat.chat_id)
 
         # Step 1: Get the last user input interaction
         user_input_interaction = await self._get_last_user_input_interaction(chat)
 
         # Step 2: Create and execute task (sync or background based on flag)
-        task, assistant_response = await self._task_scheduler.create_and_execute_task(
+        task, assistant_response = await self._task_manager.create_and_execute_task(
             chat=chat,
             interaction_id=user_input_interaction.id,
             executor=self._run_agent_for_task,
@@ -290,13 +318,12 @@ class ConversationOrchestrator:
     async def _persist_assistant_response(
         self, task: AgentTask, response: AgentOutput
     ) -> None:
-        chat_id = task.chat_id
-        chat = await self.get_chat(chat_id)
-
         """Persist the assistant response to the chat store."""
+        # Skip persistence if response has no content
         if not response.messages and not response.final_text and not response.steps:
             return
 
+        chat = await self.get_chat(task.chat_id)
         stored_agent_response = AgentOutput(**response.model_dump())
         await self._chat_store.append_interaction(chat.chat_id, stored_agent_response)
 
@@ -317,8 +344,7 @@ class ConversationOrchestrator:
 
     async def _get_last_user_input_interaction(self, chat: ChatMetadata) -> UserInput:
         """
-        Get the last interaction from the chat. Assuming that the last interaction is a user input
-        If not, raise an error
+        Get the last interaction from the chat, validating it's a user input.
 
         Raises:
             HTTPException 400: If no interactions found or last interaction is not a UserInput
@@ -327,10 +353,14 @@ class ConversationOrchestrator:
 
         if not interactions:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="No interactions found"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No interactions found",
             )
 
-        last_interaction = sorted(interactions, key=lambda x: x.created_at)[-1]
+        # Sort by created_at to ensure we get the chronologically last interaction
+        # (store implementations may not guarantee order)
+        last_interaction = max(interactions, key=lambda x: x.created_at)
+
         if last_interaction.role != Role.user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -339,12 +369,20 @@ class ConversationOrchestrator:
 
         return last_interaction
 
+    # -------------------------------------------------------------------------
+    # Chat Update Helpers
+    # -------------------------------------------------------------------------
+
+    async def _update_chat_timestamp(self, chat: ChatMetadata) -> None:
+        """Update the chat's updated_at timestamp."""
+        chat.updated_at = datetime.now(timezone.utc)
+        await self._chat_store.update_chat(chat)
+
     async def _add_task_to_chat(self, chat: ChatMetadata, task: AgentTask) -> None:
         """Add a task reference to the chat metadata."""
         chat.current_task_id = task.id
         chat.task_ids.append(task.id)
-        chat.updated_at = datetime.now(timezone.utc)
-        await self._chat_store.update_chat(chat)
+        await self._update_chat_timestamp(chat)
 
     @asynccontextmanager
     async def _acquire_chat_lock(self, chat_id: str) -> AsyncGenerator[None, None]:
