@@ -73,21 +73,24 @@ class SynchronousAgentTask(AgentTask):
 
 class BackgroundAgentTask(AgentTask):
     """Task for background execution mode with queue support.
-    
+
     The executor is embedded in the task itself, making the task self-contained.
     The queue manager simply calls the executor to run the task.
     """
+
     model_config = {"arbitrary_types_allowed": True}
-    
+
     queue_id: str = Field(description="The queue ID where this task is scheduled")
-    executor: Optional[Callable[["BackgroundAgentTask"], Awaitable[AgentOutput]]] = Field(
-        default=None,
-        exclude=True,  # Don't serialize the executor
-        description="The async function that executes this task and returns AgentOutput",
+    executor: Optional[Callable[["BackgroundAgentTask"], Awaitable[AgentOutput]]] = (
+        Field(
+            default=None,
+            exclude=True,  # Don't serialize the executor
+            description="The async function that executes this task and returns AgentOutput",
+        )
     )
 
     is_background: Literal[True] = Field(default=True, frozen=True)
-    
+
     async def execute(self) -> AgentOutput:
         """Execute this task using the embedded executor."""
         if self.executor is None:

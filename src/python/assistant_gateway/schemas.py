@@ -58,6 +58,7 @@ class AgentInteraction(BaseModel):
 
 class UserInput(AgentInteraction):
     """A message from the user."""
+
     content: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -83,6 +84,7 @@ class AgentOutput(AgentInteraction):
 
 class TaskStatus(str, Enum):
     """Status of an agent task."""
+
     pending = "pending"
     in_progress = "in_progress"
     completed = "completed"

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-from typing import AsyncIterator, Awaitable, Callable, List, Optional
+from typing import List, Optional
 
 from assistant_gateway.chat_orchestrator.core.schemas import BackgroundAgentTask
-from assistant_gateway.schemas import AgentOutput, TaskStatus
 
 
 class TaskCompletionEvent:
@@ -70,15 +68,6 @@ class TasksQueueManager:
         """
         Wait for a task to complete, fail, or be interrupted.
         Returns the final task state or None if timeout occurs.
-        """
-        raise NotImplementedError
-
-    async def subscribe_to_completions(
-        self, queue_id: str
-    ) -> AsyncIterator[TaskCompletionEvent]:
-        """
-        Subscribe to task completion events for a specific queue.
-        Yields TaskCompletionEvent when tasks complete, fail, or are interrupted.
         """
         raise NotImplementedError
 
