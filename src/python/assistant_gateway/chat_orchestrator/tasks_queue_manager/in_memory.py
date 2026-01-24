@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import AsyncIterator, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from assistant_gateway.chat_orchestrator.core.schemas import BackgroundAgentTask
 from assistant_gateway.chat_orchestrator.tasks_queue_manager.base import (
@@ -156,25 +156,6 @@ class InMemoryTasksQueueManager(TasksQueueManager):
             return None
         
         return await self.get(queue_id, task_id)
-
-    async def subscribe_to_completions(
-        self, queue_id: str
-    ) -> AsyncIterator[TaskCompletionEvent]:
-        """Subscribe to task completion events for a specific queue."""
-        queue: asyncio.Queue[TaskCompletionEvent] = asyncio.Queue()
-        
-        async with self._lock:
-            self._subscriber_queues.setdefault(queue_id, []).append(queue)
-        
-        try:
-            while True:
-                event = await queue.get()
-                yield event
-        finally:
-            async with self._lock:
-                queues = self._subscriber_queues.get(queue_id, [])
-                if queue in queues:
-                    queues.remove(queue)
 
     async def _execute_task(
         self, queue_id: str, task: BackgroundAgentTask

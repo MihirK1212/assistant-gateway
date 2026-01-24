@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional
 
 from assistant_gateway.agents.base import Agent
 
