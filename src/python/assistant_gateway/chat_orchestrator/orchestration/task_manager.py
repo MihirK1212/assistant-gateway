@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Dict, Optional
+from typing import Awaitable, Callable, Dict, Optional, Any
 from uuid import uuid4
 
 from assistant_gateway.chat_orchestrator.core.schemas import (
+    AgentTask,
     BackgroundAgentTask,
     ChatMetadata,
     SynchronousAgentTask,
@@ -14,11 +15,20 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
 )
 from assistant_gateway.chat_orchestrator.tasks_queue_manager import TasksQueueManager
 from assistant_gateway.schemas import AgentOutput, TaskStatus
-from typing import Union
+from typing import Tuple, Union
 
 
-# Type alias for background task executor
-BackgroundTaskExecutor = Callable[[BackgroundAgentTask], Awaitable[AgentOutput]]
+# Type alias for task executor (used for both sync and background tasks)
+TaskExecutor = Callable[
+    [ChatMetadata, AgentTask, Optional[UserContext], Optional[BackendServerContext]],
+    Awaitable[AgentOutput],
+]
+
+# Type alias for post-execution callback (used for both sync and background tasks)
+PostExecution = Callable[[str, AgentOutput], Awaitable[None]]
+
+# Type alias for chat retrieval (needed for background tasks to get chat from chat_id)
+GetChat = Callable[[str], Awaitable[ChatMetadata]]
 
 
 class TaskManager:
@@ -45,17 +55,82 @@ class TaskManager:
         # Maps task_id -> SynchronousAgentTask for sync tasks
         self._sync_tasks: Dict[str, SynchronousAgentTask] = {}
 
-    async def create_sync_task(
+    async def create_and_execute_task(
         self,
         chat: ChatMetadata,
         interaction_id: str,
-        user_context: Optional[UserContext] = None,
-        backend_server_context: Optional[BackendServerContext] = None,
-    ) -> SynchronousAgentTask:
+        executor: TaskExecutor,
+        post_execution: PostExecution,
+        executor_payload: Dict[str, Any],
+        run_in_background: bool = False,
+    ) -> Tuple[Union[SynchronousAgentTask, BackgroundAgentTask], Optional[AgentOutput]]:
         """
-        Create a synchronous task for immediate execution.
-        Sync tasks are executed directly by the orchestrator, not queued.
+        Create and execute a task, either synchronously or in background.
+
+        This is the unified entry point for task creation and execution.
+        Based on run_in_background flag, delegates to the appropriate method.
+
+        Args:
+            chat: The chat metadata
+            interaction_id: The interaction ID this task is for
+            executor: Callback to run the agent
+            post_execution: Callback to run after successful execution (e.g., persist response)
+            executor_payload: Payload to be passed to the executor
+            run_in_background: If True, enqueue task for background execution; otherwise execute synchronously
+
+        Returns:
+            Tuple of (task, response) where:
+            - For sync mode: response is the AgentOutput (or None if interrupted)
+            - For background mode: response is always None (task executes asynchronously)
         """
+        if run_in_background:
+            task = await self._create_and_enqueue_background_task(
+                chat=chat,
+                interaction_id=interaction_id,
+                executor=executor,
+                post_execution=post_execution,
+                executor_payload=executor_payload,
+            )
+            return task, None
+        else:
+            return await self._create_and_execute_sync_task(
+                chat=chat,
+                interaction_id=interaction_id,
+                executor=executor,
+                post_execution=post_execution,
+                executor_payload=executor_payload,
+            )
+
+    async def _create_and_execute_sync_task(
+        self,
+        chat: ChatMetadata,
+        interaction_id: str,
+        executor: TaskExecutor,
+        post_execution: PostExecution,
+        executor_payload: Dict[str, Any],
+    ) -> Tuple[SynchronousAgentTask, Optional[AgentOutput]]:
+        """
+        Create and execute a synchronous task directly.
+
+        Sync tasks are not queued - they run inline with the request.
+        This method handles the full task lifecycle:
+        1. Create the task
+        2. Check if interrupted - if so, don't execute
+        3. Set status to in_progress
+        4. Run the agent via executor
+        5. Check if interrupted during execution - if not, call post_execution
+
+        Args:
+            chat: The chat metadata
+            interaction_id: The interaction ID this task is for
+            executor: Callback to run the agent
+            post_execution: Callback to run after successful execution (e.g., persist response)
+            executor_payload: Payload to be passed to the executor
+
+        Returns:
+            Tuple of (task, response) where response is None if interrupted
+        """
+        # Create the task
         now = datetime.now(timezone.utc)
         task = SynchronousAgentTask(
             id=str(uuid4()),
@@ -64,37 +139,96 @@ class TaskManager:
             status=TaskStatus.pending,
             created_at=now,
             updated_at=now,
-            payload={
-                "user_context": user_context.model_dump() if user_context else None,
-                "backend_server_context": (
-                    backend_server_context.model_dump()
-                    if backend_server_context
-                    else None
-                ),
-            },
+            payload=executor_payload,
         )
 
         async with self._lock:
             self._sync_tasks[task.id] = task
 
-        return task
+        async def set_sync_task_status(
+            task: SynchronousAgentTask, status: TaskStatus
+        ) -> None:
+            """Update the status of a synchronous task."""
+            task.status = status
+            task.updated_at = datetime.now(timezone.utc)
+            await self.update_sync_task(task)
 
-    async def create_and_enqueue_background_task(
+        # Check if already interrupted before starting
+        if await self.is_task_interrupted(task.id):
+            await set_sync_task_status(task, TaskStatus.interrupted)
+            return task, None
+
+        # Update task to in_progress
+        await set_sync_task_status(task, TaskStatus.in_progress)
+
+        try:
+            # Run the agent
+            response = await executor(
+                task,
+                **task.payload,
+            )
+
+            # Check if task was interrupted during execution
+            if await self.is_task_interrupted(task.id):
+                await set_sync_task_status(task, TaskStatus.interrupted)
+                return task, None
+
+            # Post-execution (e.g., persist the response)
+            await post_execution(task, response)
+
+            # Task completed successfully
+            await set_sync_task_status(task, TaskStatus.completed)
+            return task, response
+
+        except Exception as exc:
+            task.error = str(exc)
+            await set_sync_task_status(task, TaskStatus.failed)
+            raise
+
+    async def _create_and_enqueue_background_task(
         self,
         chat: ChatMetadata,
         interaction_id: str,
-        executor: BackgroundTaskExecutor,
-        user_context: Optional[UserContext] = None,
-        backend_server_context: Optional[BackendServerContext] = None,
+        executor: TaskExecutor,
+        post_execution: PostExecution,
+        executor_payload: Dict[str, Any],
     ) -> BackgroundAgentTask:
         """
-        Create a background task with embedded executor and enqueue it.
+        Create a background task and enqueue it.
 
-        The executor is embedded in the task itself, making the task self-contained.
-        The queue manager will call task.execute() to run it.
+        Uses the same executor and post_execution callbacks as sync tasks.
+        The task manager creates a wrapper that implements the unified execution flow:
+        1. Check if interrupted - if so, don't execute
+        2. Run the agent via executor
+        3. Check if interrupted during execution - if not, call post_execution
+
+        Note: Status updates (in_progress, completed, failed) are handled by the queue manager.
+
+        Args:
+            chat: The chat metadata
+            interaction_id: The interaction ID this task is for
+            executor: Callback to run the agent (same as sync tasks)
+            post_execution: Callback to run after successful execution (same as sync tasks)
+            get_chat: Callback to retrieve chat by ID (needed to reconstruct chat for execution)
+            executor_payload: Payload to be passed to the executor
         """
         queue_id = self._get_queue_id_for_chat(chat, interaction_id)
         now = datetime.now(timezone.utc)
+
+        # Create wrapper that implements the unified execution flow
+        async def execution_wrapper(task: BackgroundAgentTask) -> AgentOutput:
+            # Check if interrupted before starting
+            if await self.is_task_interrupted(task.id):
+                return None
+
+            # Run the agent
+            response = await executor(task, **task.payload)
+
+            # Check if interrupted during execution - if not, call post_execution
+            if not await self.is_task_interrupted(task.id):
+                await post_execution(task, response)
+
+            return response
 
         task = BackgroundAgentTask(
             id=str(uuid4()),
@@ -104,15 +238,8 @@ class TaskManager:
             status=TaskStatus.pending,
             created_at=now,
             updated_at=now,
-            executor=executor,
-            payload={
-                "user_context": user_context.model_dump() if user_context else None,
-                "backend_server_context": (
-                    backend_server_context.model_dump()
-                    if backend_server_context
-                    else None
-                ),
-            },
+            executor=execution_wrapper,
+            payload=executor_payload,
         )
 
         # Track the mapping before enqueueing
@@ -150,11 +277,13 @@ class TaskManager:
             if task.id in self._sync_tasks:
                 self._sync_tasks[task.id] = task
 
-    async def interrupt_task(self, task_id: str) -> Optional[Union[SynchronousAgentTask, BackgroundAgentTask]]: 
+    async def interrupt_task(
+        self, task_id: str
+    ) -> Optional[Union[SynchronousAgentTask, BackgroundAgentTask]]:
         task = await self.get_task(task_id)
         if task is None:
             return None
-            
+
         if task.is_terminal():
             return task
 
@@ -162,7 +291,7 @@ class TaskManager:
             return await self._interrupt_background_task(task.id)
         else:
             return await self._interrupt_sync_task(task.id)
-    
+
     async def wait_for_background_task(
         self, task_id: str, timeout: Optional[float] = None
     ) -> Optional[BackgroundAgentTask]:
@@ -185,7 +314,6 @@ class TaskManager:
         task = await self.get_task(task_id)
         return task is not None and task.is_interrupted()
 
-
     def _get_queue_id_for_chat(self, chat: ChatMetadata, interaction_id: str) -> str:
         """
         Determine the queue_id for a given chat and interaction.
@@ -195,7 +323,9 @@ class TaskManager:
         """
         return chat.chat_id
 
-    async def _interrupt_sync_task(self, task_id: str) -> Optional[SynchronousAgentTask]:
+    async def _interrupt_sync_task(
+        self, task_id: str
+    ) -> Optional[SynchronousAgentTask]:
         """
         Interrupt a synchronous task.
         Note: Actual cancellation of running code must be handled by the caller.

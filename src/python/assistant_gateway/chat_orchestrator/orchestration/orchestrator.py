@@ -1,37 +1,28 @@
 from __future__ import annotations
-
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple, Union
+from typing import AsyncGenerator, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
+
 from fastapi import HTTPException, status
 
-from assistant_gateway.schemas import (
-    AgentOutput,
-    Role,
-    UserInput,
-    AgentOutput,
-    TaskStatus,
-)
-from assistant_gateway.chat_orchestrator.core.config import (
-    GatewayConfig,
-)
+from assistant_gateway.chat_orchestrator.core.config import GatewayConfig
 from assistant_gateway.chat_orchestrator.core.schemas import (
+    AgentInteraction,
     AgentTask,
-    BackgroundAgentTask,
-    SynchronousAgentTask,
     BackendServerContext,
+    BackgroundAgentTask,
     ChatMetadata,
     ChatStatus,
-    AgentInteraction,
+    SynchronousAgentTask,
     UserContext,
 )
 from assistant_gateway.chat_orchestrator.orchestration.agent_session_manager import (
     AgentSessionManager,
 )
-from assistant_gateway.chat_orchestrator.orchestration.task_manager import (
-    TaskManager,
-)
+from assistant_gateway.chat_orchestrator.orchestration.task_manager import TaskManager
+from assistant_gateway.schemas import AgentOutput, Role, UserInput
 
 
 class ConversationOrchestrator:
@@ -112,10 +103,7 @@ class ConversationOrchestrator:
         """
 
         chat = await self.get_chat(chat_id)
-        interactions = await self._chat_store.list_interactions(chat.chat_id)
-        return [
-            self._coerce_agent_interaction(interaction) for interaction in interactions
-        ]
+        return await self._chat_store.list_interactions(chat.chat_id)
 
     async def send_message(
         self,
@@ -140,25 +128,18 @@ class ConversationOrchestrator:
         """
 
         # Acquire lock to prevent concurrent operations on the same chat
-        lock = self._get_chat_lock(chat_id)
-        if lock.locked():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Another operation is already in progress on this chat",
-            )
-
-        async with lock:
+        async with self._acquire_chat_lock(chat_id):
             # Step 1: Get the chat
             chat = await self.get_chat(chat_id)
 
             # Step 2: Create and add user input to chat as the last interaction
             await self._create_and_add_user_input_to_chat(
-                chat.chat_id, content, message_metadata
+                chat, content, message_metadata
             )
 
             # Step 3: Run the agent using all the interaction upto the recently added user input
             return await self._run_agent_using_all_interactions(
-                chat_id=chat.chat_id,
+                chat=chat,
                 user_context=user_context,
                 backend_server_context=backend_server_context,
                 run_in_background=run_in_background,
@@ -215,16 +196,8 @@ class ConversationOrchestrator:
         Raises:
             HTTPException 409: If another operation is already in progress on this chat
         """
-
         # Acquire lock to prevent concurrent operations on the same chat
-        lock = self._get_chat_lock(chat_id)
-        if lock.locked():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Another operation is already in progress on this chat",
-            )
-
-        async with lock:
+        async with self._acquire_chat_lock(chat_id):
             # Step 1: Get the chat
             chat = await self.get_chat(chat_id)
 
@@ -233,181 +206,63 @@ class ConversationOrchestrator:
 
             # Step 3: Run the agent using all the interaction upto the recently added user input
             return await self._run_agent_using_all_interactions(
-                chat_id=chat.chat_id,
+                chat=chat,
                 user_context=user_context,
                 backend_server_context=backend_server_context,
                 run_in_background=run_in_background,
             )
 
     async def _create_and_add_user_input_to_chat(
-        self, chat_id: str, content: str, message_metadata: Optional[Dict] = None
+        self, chat: ChatMetadata, content: str, message_metadata: Optional[Dict] = None
     ) -> UserInput:
-        chat = await self.get_chat(chat_id)
         user_input = UserInput(
             role=Role.user,
             content=content,
             metadata=message_metadata or {},
         )
-        await self._chat_store.append_interaction(chat_id, user_input)
+        await self._chat_store.append_interaction(chat.chat_id, user_input)
         chat.updated_at = datetime.now(timezone.utc)
         await self._chat_store.update_chat(chat)
         return user_input
 
     async def _run_agent_using_all_interactions(
         self,
-        chat_id: str,
+        chat: ChatMetadata,
         user_context: Optional[UserContext] = None,
         backend_server_context: Optional[BackendServerContext] = None,
         run_in_background: bool = False,
     ) -> Tuple[ChatMetadata, Optional[AgentOutput], Optional[AgentTask]]:
         """
         Run the agent for all interactions in the chat.
+
+        Ensure that the last interaction is a user input
+        Then, based on the run_in_background flag, create and execute/enqueue a sync or background task
         """
-        chat = await self.get_chat(chat_id)
+        chat = await self.get_chat(chat.chat_id)
 
-        # Step 1: Get all interactions in the chat
-        interactions = await self._chat_store.list_interactions(chat.chat_id)
+        # Step 1: Get the last user input interaction
+        user_input_interaction = await self._get_last_user_input_interaction(chat)
 
-        if not interactions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="No interactions found"
-            )
-
-        user_input_interaction = sorted(interactions, key=lambda x: x.created_at)[-1]
-        if user_input_interaction.role != Role.user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Inconsistency in interactions: Last interaction is not a user input",
-            )
-
-        # Step 2: Submit background task to queue
-        if run_in_background:
-            task = await self._task_scheduler.create_and_enqueue_background_task(
-                chat=chat,
-                interaction_id=user_input_interaction.id,
-                executor=self._execute_background_task,
-                user_context=user_context,
-                backend_server_context=backend_server_context,
-            )
-            await self._add_task_to_chat(chat, task)
-            return chat, None, task
-
-        # Step 3: Execute sync task directly
-        else:
-            task, assistant_response = await self._execute_sync_task(
-                chat=chat,
-                interaction_id=user_input_interaction.id,
-                user_context=user_context,
-                backend_server_context=backend_server_context,
-            )
-            await self._add_task_to_chat(chat, task)
-            return chat, assistant_response, task
-
-    async def _get_interactions_up_to(
-        self, chat_id: str, interaction_id: str
-    ) -> List[AgentInteraction]:
-        """
-        Get all interactions up to and including the specified interaction_id.
-        This is used when running/rerunning a task for a specific interaction.
-        """
-        all_interactions = await self._chat_store.list_interactions(chat_id)
-        result = []
-        for interaction in all_interactions:
-            result.append(interaction)
-            if interaction.id == interaction_id:
-                break
-        return result
-
-    async def _execute_sync_task(
-        self,
-        chat: ChatMetadata,
-        interaction_id: str,
-        user_context: Optional[UserContext] = None,
-        backend_server_context: Optional[BackendServerContext] = None,
-    ) -> Tuple[SynchronousAgentTask, Optional[AgentOutput]]:
-        """
-        Execute a synchronous task directly and return the task and response.
-
-        Sync tasks are not queued - they run inline with the request.
-        """
-        # Create the task
-        task = await self._task_scheduler.create_sync_task(
+        # Step 2: Create and execute task (sync or background based on flag)
+        task, assistant_response = await self._task_scheduler.create_and_execute_task(
             chat=chat,
-            interaction_id=interaction_id,
-            user_context=user_context,
-            backend_server_context=backend_server_context,
+            interaction_id=user_input_interaction.id,
+            executor=self._run_agent_for_task,
+            post_execution=self._persist_assistant_response,
+            executor_payload={
+                "chat": chat,
+                "user_context": user_context,
+                "backend_server_context": backend_server_context,
+            },
+            run_in_background=run_in_background,
         )
-
-        # Update task to in_progress
-        await self._set_sync_task_status(task, TaskStatus.in_progress)
-
-        try:
-            # Check if already interrupted before starting
-            if await self._task_scheduler.is_task_interrupted(task.id):
-                await self._set_sync_task_status(task, TaskStatus.interrupted)
-                return task, None
-
-            # Run the agent
-            response = await self._run_agent_for_task(
-                chat=chat,
-                task=task,
-                user_context=user_context,
-                backend_server_context=backend_server_context,
-            )
-
-            # Check if task was interrupted during execution
-            if await self._task_scheduler.is_task_interrupted(task.id):
-                await self._set_sync_task_status(task, TaskStatus.interrupted)
-                return task, None
-
-            # Persist the response
-            await self._persist_assistant_response(
-                chat_id=chat.chat_id, response=response
-            )
-
-            # Task completed successfully
-            await self._set_sync_task_status(task, TaskStatus.completed)
-            return task, response
-
-        except Exception as exc:
-            task.error = str(exc)
-            await self._set_sync_task_status(task, TaskStatus.failed)
-            raise
-
-    async def _execute_background_task(self, task: BackgroundAgentTask) -> AgentOutput:
-        """
-        Executor function called by the queue manager to run a background task.
-
-        This is the callback provided to the queue manager. The queue manager
-        handles task status updates, so we just need to run the agent and
-        return the result (or raise an exception on failure).
-        """
-        # Reconstruct context from task payload
-        user_context = None
-        backend_server_context = None
-
-        if task.payload.get("user_context"):
-            user_context = UserContext(**task.payload["user_context"])
-        if task.payload.get("backend_server_context"):
-            backend_server_context = BackendServerContext(
-                **task.payload["backend_server_context"]
-            )
-
-        # Get the chat
-        chat = await self.get_chat(task.chat_id)
-
-        # Run the agent and return the result
-        return await self._run_agent_for_task(
-            chat=chat,
-            task=task,
-            user_context=user_context,
-            backend_server_context=backend_server_context,
-        )
+        await self._add_task_to_chat(chat, task)
+        return chat, assistant_response, task
 
     async def _run_agent_for_task(
         self,
-        chat: ChatMetadata,
         task: AgentTask,
+        chat: ChatMetadata,
         user_context: Optional[UserContext] = None,
         backend_server_context: Optional[BackendServerContext] = None,
     ) -> AgentOutput:
@@ -433,33 +288,56 @@ class ConversationOrchestrator:
         return response
 
     async def _persist_assistant_response(
-        self, chat_id: str, response: AgentOutput
+        self, task: AgentTask, response: AgentOutput
     ) -> None:
+        chat_id = task.chat_id
+        chat = await self.get_chat(chat_id)
+
         """Persist the assistant response to the chat store."""
         if not response.messages and not response.final_text and not response.steps:
             return
 
-        stored_agent_response = AgentOutput(
-            **response.model_dump()
-        )
-        await self._chat_store.append_interaction(chat_id, stored_agent_response)
+        stored_agent_response = AgentOutput(**response.model_dump())
+        await self._chat_store.append_interaction(chat.chat_id, stored_agent_response)
 
-    def _coerce_agent_interaction(
-        self, interaction: AgentInteraction
-    ) -> AgentInteraction:
-        if isinstance(interaction, (UserInput, AgentOutput)):
-            return interaction
+    async def _get_interactions_up_to(
+        self, chat_id: str, interaction_id: str
+    ) -> List[AgentInteraction]:
+        """
+        Get all interactions up to and including the specified interaction_id.
+        This is used when running/rerunning a task for a specific interaction.
+        """
+        all_interactions = await self._chat_store.list_interactions(chat_id)
+        result = []
+        for interaction in all_interactions:
+            result.append(interaction)
+            if interaction.id == interaction_id:
+                break
+        return result
 
-        if isinstance(interaction, AgentOutput):
-            # Backward-compatibility: convert legacy AgentOutput instances persisted before
-            # AgentOutput was introduced.
-            created_at = getattr(interaction, "created_at", datetime.now(timezone.utc))
-            return AgentOutput(
-                **interaction.model_dump(),
-                metadata=getattr(interaction, "metadata", {}),
+    async def _get_last_user_input_interaction(self, chat: ChatMetadata) -> UserInput:
+        """
+        Get the last interaction from the chat. Assuming that the last interaction is a user input
+        If not, raise an error
+
+        Raises:
+            HTTPException 400: If no interactions found or last interaction is not a UserInput
+        """
+        interactions = await self._chat_store.list_interactions(chat.chat_id)
+
+        if not interactions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="No interactions found"
             )
 
-        raise ValueError(f"Unsupported interaction type: {type(interaction)}")
+        last_interaction = sorted(interactions, key=lambda x: x.created_at)[-1]
+        if last_interaction.role != Role.user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inconsistency in interactions: Last interaction is not a UserInput",
+            )
+
+        return last_interaction
 
     async def _add_task_to_chat(self, chat: ChatMetadata, task: AgentTask) -> None:
         """Add a task reference to the chat metadata."""
@@ -468,13 +346,28 @@ class ConversationOrchestrator:
         chat.updated_at = datetime.now(timezone.utc)
         await self._chat_store.update_chat(chat)
 
-    async def _set_sync_task_status(self, task: AgentTask, status: TaskStatus) -> None:
-        task.status = status
-        task.updated_at = datetime.now(timezone.utc)
-        await self._task_scheduler.update_sync_task(task)
+    @asynccontextmanager
+    async def _acquire_chat_lock(self, chat_id: str) -> AsyncGenerator[None, None]:
+        """
+        Acquire lock for chat, raising 409 if already locked.
 
-    def _get_chat_lock(self, chat_id: str) -> asyncio.Lock:
-        """Get or create a lock for the specified chat."""
+        Uses timeout=0 to atomically try-acquire the lock, avoiding the race
+        condition of checking locked() then acquiring separately.
+        """
+        # TODO: centralize all the locking to a distributed lock manager instead of in-memory
+
         if chat_id not in self._chat_locks:
             self._chat_locks[chat_id] = asyncio.Lock()
-        return self._chat_locks[chat_id]
+        lock = self._chat_locks[chat_id]
+
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=0)
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Another operation is already in progress on this chat",
+            )
+        try:
+            yield
+        finally:
+            lock.release()
