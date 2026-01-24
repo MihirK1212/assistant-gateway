@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Dict, Optional, Any
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Union
 from uuid import uuid4
 
 from assistant_gateway.chat_orchestrator.core.schemas import (
@@ -10,25 +10,17 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
     BackgroundAgentTask,
     ChatMetadata,
     SynchronousAgentTask,
-    UserContext,
-    BackendServerContext,
 )
 from assistant_gateway.chat_orchestrator.tasks_queue_manager import TasksQueueManager
 from assistant_gateway.schemas import AgentOutput, TaskStatus
-from typing import Tuple, Union
 
 
-# Type alias for task executor (used for both sync and background tasks)
-TaskExecutor = Callable[
-    [ChatMetadata, AgentTask, Optional[UserContext], Optional[BackendServerContext]],
-    Awaitable[AgentOutput],
-]
+# Type alias for task executor: (task, **payload) -> AgentOutput
+# The executor receives the task and unpacked payload kwargs
+TaskExecutor = Callable[..., Awaitable[AgentOutput]]
 
-# Type alias for post-execution callback (used for both sync and background tasks)
-PostExecution = Callable[[str, AgentOutput], Awaitable[None]]
-
-# Type alias for chat retrieval (needed for background tasks to get chat from chat_id)
-GetChat = Callable[[str], Awaitable[ChatMetadata]]
+# Type alias for post-execution callback: (task, response) -> None
+PostExecution = Callable[[AgentTask, AgentOutput], Awaitable[None]]
 
 
 class TaskManager:
@@ -130,7 +122,7 @@ class TaskManager:
         Returns:
             Tuple of (task, response) where response is None if interrupted
         """
-        # Create the task
+        # Create and register the task
         now = datetime.now(timezone.utc)
         task = SynchronousAgentTask(
             id=str(uuid4()),
@@ -145,44 +137,33 @@ class TaskManager:
         async with self._lock:
             self._sync_tasks[task.id] = task
 
-        async def set_sync_task_status(
-            task: SynchronousAgentTask, status: TaskStatus
-        ) -> None:
-            """Update the status of a synchronous task."""
-            task.status = status
-            task.updated_at = datetime.now(timezone.utc)
-            await self.update_sync_task(task)
-
         # Check if already interrupted before starting
         if await self.is_task_interrupted(task.id):
-            await set_sync_task_status(task, TaskStatus.interrupted)
+            await self._update_sync_task_status(task, TaskStatus.interrupted)
             return task, None
 
         # Update task to in_progress
-        await set_sync_task_status(task, TaskStatus.in_progress)
+        await self._update_sync_task_status(task, TaskStatus.in_progress)
 
         try:
             # Run the agent
-            response = await executor(
-                task,
-                **task.payload,
-            )
+            response = await executor(task, **task.payload)
 
             # Check if task was interrupted during execution
             if await self.is_task_interrupted(task.id):
-                await set_sync_task_status(task, TaskStatus.interrupted)
+                await self._update_sync_task_status(task, TaskStatus.interrupted)
                 return task, None
 
             # Post-execution (e.g., persist the response)
             await post_execution(task, response)
 
             # Task completed successfully
-            await set_sync_task_status(task, TaskStatus.completed)
+            await self._update_sync_task_status(task, TaskStatus.completed)
             return task, response
 
         except Exception as exc:
             task.error = str(exc)
-            await set_sync_task_status(task, TaskStatus.failed)
+            await self._update_sync_task_status(task, TaskStatus.failed)
             raise
 
     async def _create_and_enqueue_background_task(
@@ -209,14 +190,16 @@ class TaskManager:
             interaction_id: The interaction ID this task is for
             executor: Callback to run the agent (same as sync tasks)
             post_execution: Callback to run after successful execution (same as sync tasks)
-            get_chat: Callback to retrieve chat by ID (needed to reconstruct chat for execution)
             executor_payload: Payload to be passed to the executor
+
+        Returns:
+            The created BackgroundAgentTask (already enqueued)
         """
         queue_id = self._get_queue_id_for_chat(chat, interaction_id)
         now = datetime.now(timezone.utc)
 
         # Create wrapper that implements the unified execution flow
-        async def execution_wrapper(task: BackgroundAgentTask) -> AgentOutput:
+        async def execution_wrapper(task: BackgroundAgentTask) -> Optional[AgentOutput]:
             # Check if interrupted before starting
             if await self.is_task_interrupted(task.id):
                 return None
@@ -254,36 +237,113 @@ class TaskManager:
     async def get_task(
         self, task_id: str
     ) -> Optional[Union[SynchronousAgentTask, BackgroundAgentTask]]:
-        async def _get_sync_task(task_id: str) -> Optional[SynchronousAgentTask]:
-            """Get a synchronous task by ID."""
-            async with self._lock:
-                return self._sync_tasks.get(task_id)
+        """
+        Get a task by ID, checking both sync and background task stores.
 
-        async def _get_background_task(task_id: str) -> Optional[BackgroundAgentTask]:
-            """Get a background task by ID from the queue manager."""
-            async with self._lock:
-                queue_id = self._task_queue_mapping.get(task_id)
+        Args:
+            task_id: The task ID to look up
 
-            if queue_id is None:
-                return None
+        Returns:
+            The task if found, None otherwise
+        """
+        # Try sync tasks first
+        task = await self._get_sync_task(task_id)
+        if task is not None:
+            return task
 
-            return await self._queue_manager.get(queue_id, task_id)
+        # Fall back to background tasks
+        return await self._get_background_task(task_id)
 
-        return await _get_sync_task(task_id) or await _get_background_task(task_id)
+    # -------------------------------------------------------------------------
+    # Sync Task Management
+    # -------------------------------------------------------------------------
+    async def _get_sync_task(self, task_id: str) -> Optional[SynchronousAgentTask]:
+        """Get a synchronous task by ID."""
+        async with self._lock:
+            return self._sync_tasks.get(task_id)
 
-    async def update_sync_task(self, task: SynchronousAgentTask) -> None:
-        """Update a synchronous task."""
+    async def _update_sync_task_status(
+        self, task: SynchronousAgentTask, status: TaskStatus
+    ) -> None:
+        """Update the status of a synchronous task."""
+        task.status = status
+        task.updated_at = datetime.now(timezone.utc)
         async with self._lock:
             if task.id in self._sync_tasks:
                 self._sync_tasks[task.id] = task
 
+    async def _interrupt_sync_task(
+        self, task_id: str
+    ) -> Optional[SynchronousAgentTask]:
+        """
+        Interrupt a synchronous task.
+
+        Note: Actual cancellation of running code must be handled by the caller.
+        """
+        async with self._lock:
+            task = self._sync_tasks.get(task_id)
+            if task and task.status in (TaskStatus.pending, TaskStatus.in_progress):
+                task.status = TaskStatus.interrupted
+                task.updated_at = datetime.now(timezone.utc)
+                self._sync_tasks[task_id] = task
+            return task
+
+    # -------------------------------------------------------------------------
+    # Background Task Management
+    # -------------------------------------------------------------------------
+
+    async def _get_background_task(
+        self, task_id: str
+    ) -> Optional[BackgroundAgentTask]:
+        """Get a background task by ID from the queue manager."""
+        async with self._lock:
+            queue_id = self._task_queue_mapping.get(task_id)
+
+        if queue_id is None:
+            return None
+
+        return await self._queue_manager.get(queue_id, task_id)
+
+    async def _get_queue_id_for_task(self, task_id: str) -> Optional[str]:
+        """Get the queue ID for a background task."""
+        async with self._lock:
+            return self._task_queue_mapping.get(task_id)
+
+    async def _interrupt_background_task(
+        self, task_id: str
+    ) -> Optional[BackgroundAgentTask]:
+        """
+        Interrupt a background task.
+
+        The queue manager handles cancellation of the running task.
+        """
+        queue_id = await self._get_queue_id_for_task(task_id)
+        if queue_id is None:
+            return None
+
+        return await self._queue_manager.interrupt(queue_id, task_id)
+
+    # -------------------------------------------------------------------------
+    # Public Task Operations
+    # -------------------------------------------------------------------------
+
     async def interrupt_task(
         self, task_id: str
     ) -> Optional[Union[SynchronousAgentTask, BackgroundAgentTask]]:
+        """
+        Interrupt a task by ID.
+
+        Args:
+            task_id: The task ID to interrupt
+
+        Returns:
+            The interrupted task, or None if not found
+        """
         task = await self.get_task(task_id)
         if task is None:
             return None
 
+        # Already in terminal state - nothing to do
         if task.is_terminal():
             return task
 
@@ -297,22 +357,28 @@ class TaskManager:
     ) -> Optional[BackgroundAgentTask]:
         """
         Wait for a background task to complete.
-        Returns the final task state or None if timeout occurs.
-        """
-        async with self._lock:
-            queue_id = self._task_queue_mapping.get(task_id)
 
+        Args:
+            task_id: The task ID to wait for
+            timeout: Optional timeout in seconds
+
+        Returns:
+            The final task state, or None if not found or timeout occurs
+        """
+        queue_id = await self._get_queue_id_for_task(task_id)
         if queue_id is None:
             return None
 
         return await self._queue_manager.wait_for_completion(queue_id, task_id, timeout)
 
     async def is_task_interrupted(self, task_id: str) -> bool:
-        """
-        Check if a task has been interrupted.
-        """
+        """Check if a task has been interrupted."""
         task = await self.get_task(task_id)
         return task is not None and task.is_interrupted()
+
+    # -------------------------------------------------------------------------
+    # Queue ID Resolution
+    # -------------------------------------------------------------------------
 
     def _get_queue_id_for_chat(self, chat: ChatMetadata, interaction_id: str) -> str:
         """
@@ -320,37 +386,14 @@ class TaskManager:
 
         Currently uses chat_id as the queue_id to ensure sequential processing
         per chat. This can be customized in the future for more complex routing.
+
+        Args:
+            chat: The chat metadata
+            interaction_id: The interaction ID (unused, reserved for future routing)
+
+        Returns:
+            The queue ID to use for this chat
         """
+        # interaction_id is unused but kept for future routing flexibility
+        _ = interaction_id
         return chat.chat_id
-
-    async def _interrupt_sync_task(
-        self, task_id: str
-    ) -> Optional[SynchronousAgentTask]:
-        """
-        Interrupt a synchronous task.
-        Note: Actual cancellation of running code must be handled by the caller.
-        """
-        async with self._lock:
-            task = self._sync_tasks.get(task_id)
-            if task and task.status in (TaskStatus.pending, TaskStatus.in_progress):
-                task.status = TaskStatus.interrupted
-                task.updated_at = datetime.now(timezone.utc)
-                self._sync_tasks[task_id] = task
-                return task
-            return task
-
-    async def _interrupt_background_task(
-        self, task_id: str
-    ) -> Optional[BackgroundAgentTask]:
-        """
-        Interrupt a background task.
-        The queue manager handles cancellation of the running task.
-        """
-        async with self._lock:
-            queue_id = self._task_queue_mapping.get(task_id)
-
-        if queue_id is None:
-            return None
-
-        # Queue manager handles interrupt + cancellation
-        return await self._queue_manager.interrupt(queue_id, task_id)
