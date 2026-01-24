@@ -399,7 +399,7 @@ class ConversationOrchestrator:
         lock = self._chat_locks[chat_id]
 
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=0)
+            await asyncio.wait_for(lock.acquire(), timeout=1)
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
