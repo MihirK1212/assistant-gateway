@@ -72,8 +72,6 @@ class ClaudeBaseAgent(Agent):
     async def run(self, interactions: List[AgentInteraction]) -> AgentOutput:
         mcp_server_options = self.get_mcp_server_options()
 
-        print("interactions inside claude base agent", interactions)
-
         # Convert messages to Claude SDK format
         # Extract content using helper method that handles different AgentInteraction subclasses
         claude_messages = []
@@ -89,8 +87,6 @@ class ClaudeBaseAgent(Agent):
 
         prompt = claude_messages[-1]["content"] if claude_messages else ""
 
-        print("prompt inside claude base agent", prompt)
-
         # Call Claude with the configured MCP server options using ClaudeSDKClient
         # Collect all messages from the stream for proper parsing
         all_messages: List[Any] = []
@@ -98,8 +94,6 @@ class ClaudeBaseAgent(Agent):
             await client.query(prompt)
             async for message in client.receive_response():
                 all_messages.append(message)
-
-        print("all_messages inside claude base agent", all_messages)
 
         # Parse all messages into message, steps and result text in order to return an AgentOutput
         assistant_messages: List[str] = []
@@ -234,7 +228,7 @@ class ClaudeBaseAgent(Agent):
 
         Handles:
         - UserInput: has .content attribute
-        - StoredAgentInteraction: has metadata['content']
+        - AgentInteraction: has metadata['content']
         - Other AgentInteraction subclasses: check for content in metadata or direct attribute
         """
         # Check if it's a UserInput with direct content attribute
@@ -256,7 +250,7 @@ class ClaudeBaseAgent(Agent):
             if final_text:
                 return cls._stringify(final_text)
 
-        # Check for content in metadata (StoredAgentInteraction pattern)
+        # Check for content in metadata (AgentInteraction pattern)
         if hasattr(interaction, "metadata") and isinstance(interaction.metadata, dict):
             content = interaction.metadata.get("content")
             if content is not None:
@@ -358,9 +352,17 @@ class ClaudeBaseAgent(Agent):
         from claude_agent_sdk import tool as claude_tool_decorator
 
         tool_input_schema = cls._build_input_schema(tool)
-        # print(f"tool input schema: {tool_input_schema}")
 
-        @claude_tool_decorator(tool.name, tool.config.description, tool_input_schema)
+        tool_description = f'''
+        {tool.config.description}
+
+        Input description: {tool.config.input_description or "No input description provided"}
+        Output description: {tool.config.output_description or "No output description provided"}
+        '''
+
+        print(f"tool description: {tool_description}")
+
+        @claude_tool_decorator(tool.name, tool_description, tool_input_schema)
         async def _invoke(args: Dict[str, Any]):
             tool_context = ToolContext(input=args).apply_input_overrides(
                 agent_level_input_overrides

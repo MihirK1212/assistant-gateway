@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import uuid
 from enum import Enum
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -49,13 +51,16 @@ class AgentStep(BaseModel):
 class AgentInteraction(BaseModel):
     """An interaction in the conversation."""
 
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     role: Role
 
 
 class UserInput(AgentInteraction):
-    content: str
-
     """A message from the user."""
+
+    content: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -69,8 +74,19 @@ class AgentOutput(AgentInteraction):
     messages: List[str]
     steps: List[AgentStep] = Field(default_factory=list)
     final_text: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def __init__(self, **data):
         super().__init__(**data)
         if self.role != Role.assistant:
             raise ValueError("AgentOutput.role must be 'assistant'")
+
+
+class TaskStatus(str, Enum):
+    """Status of an agent task."""
+
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
+    failed = "failed"
+    interrupted = "interrupted"
