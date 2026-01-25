@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Type
 from urllib.parse import urljoin
 import httpx
-from pydantic import BaseModel, Field, ValidationError, create_model, model_validator
-from copy import deepcopy
+from pydantic import BaseModel, Field, ValidationError, create_model
+
 
 from assistant_gateway.errors import ToolExecutionError
 from assistant_gateway.schemas import ToolResult
@@ -239,7 +239,7 @@ class RESTTool(Tool):
     def get_field_description_from_model(cls, model: Optional[Type[BaseModel]]) -> str:
         if model is None:
             return "Arbitrary JSON response from the CRUD backend."
-        desc = f"Model description:"
+        desc = "Model description:"
         if hasattr(model, "model_fields") and model.model_fields:
             field_descriptions = []
             for name, field in model.model_fields.items():
