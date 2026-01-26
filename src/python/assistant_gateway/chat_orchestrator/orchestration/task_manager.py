@@ -1,3 +1,14 @@
+"""
+Task Manager for the Chat Orchestrator.
+
+Manages task creation, queue assignment, and task-to-queue mapping.
+Supports both synchronous (inline) and background (queued) execution modes.
+
+For background tasks, supports two queue manager implementations:
+1. InMemoryTasksQueueManager: Uses embedded executor functions (single-process)
+2. CeleryTasksQueueManager: Uses executor registry with named executors (distributed)
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +23,9 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
     SynchronousAgentTask,
 )
 from assistant_gateway.chat_orchestrator.tasks_queue_manager import TasksQueueManager
+from assistant_gateway.chat_orchestrator.tasks_queue_manager.base import (
+    default_executor_registry,
+)
 from assistant_gateway.schemas import AgentOutput, TaskStatus
 
 
@@ -32,13 +46,35 @@ class TaskManager:
     - Determining the queue_id for background tasks
     - Tracking which tasks are scheduled to which queues
     - Managing sync task lifecycle (background tasks are managed by the queue)
+    - Lifecycle management (start/stop the queue manager)
 
     Note: Background task execution is handled by the QueueManager.
     The manager just creates and enqueues tasks.
+
+    Lifecycle:
+    - Call start() to begin processing background tasks
+    - Call stop() for graceful shutdown
+    - Can be used as async context manager
+
+    For Celery integration:
+    - Register executors using `register_executor()` before calling start()
+    - Pass `executor_name` when creating background tasks
+    - Celery workers must have access to the same executor registry
     """
 
-    def __init__(self, queue_manager: TasksQueueManager) -> None:
+    def __init__(
+        self,
+        queue_manager: TasksQueueManager,
+    ) -> None:
+        """
+        Initialize the TaskManager.
+
+        Args:
+            queue_manager: The queue manager for background task execution
+            executor_registry: Optional custom executor registry (uses default if not provided)
+        """
         self._queue_manager = queue_manager
+        self._executor_registry = default_executor_registry
         self._lock = asyncio.Lock()
 
         # Maps task_id -> queue_id for background tasks
@@ -46,6 +82,10 @@ class TaskManager:
 
         # Maps task_id -> SynchronousAgentTask for sync tasks
         self._sync_tasks: Dict[str, SynchronousAgentTask] = {}
+
+    # -------------------------------------------------------------------------
+    # Task Creation and Execution
+    # -------------------------------------------------------------------------
 
     async def create_and_execute_task(
         self,
@@ -55,6 +95,7 @@ class TaskManager:
         post_execution: PostExecution,
         executor_payload: Dict[str, Any],
         run_in_background: bool = False,
+        executor_name: Optional[str] = None,
     ) -> Tuple[Union[SynchronousAgentTask, BackgroundAgentTask], Optional[AgentOutput]]:
         """
         Create and execute a task, either synchronously or in background.
@@ -65,10 +106,11 @@ class TaskManager:
         Args:
             chat: The chat metadata
             interaction_id: The interaction ID this task is for
-            executor: Callback to run the agent
-            post_execution: Callback to run after successful execution (e.g., persist response)
+            executor: Callback to run the agent (used for sync and in-memory background)
+            post_execution: Callback after successful execution
             executor_payload: Payload to be passed to the executor
-            run_in_background: If True, enqueue task for background execution; otherwise execute synchronously
+            run_in_background: If True, enqueue task for background execution
+            executor_name: Name of registered executor (required for Celery mode)
 
         Returns:
             Tuple of (task, response) where:
@@ -82,6 +124,7 @@ class TaskManager:
                 executor=executor,
                 post_execution=post_execution,
                 executor_payload=executor_payload,
+                executor_name=executor_name,
             )
             return task, None
         else:
@@ -116,7 +159,7 @@ class TaskManager:
             chat: The chat metadata
             interaction_id: The interaction ID this task is for
             executor: Callback to run the agent
-            post_execution: Callback to run after successful execution (e.g., persist response)
+            post_execution: Callback to run after successful execution
             executor_payload: Payload to be passed to the executor
 
         Returns:
@@ -173,11 +216,15 @@ class TaskManager:
         executor: TaskExecutor,
         post_execution: PostExecution,
         executor_payload: Dict[str, Any],
+        executor_name: Optional[str] = None,
     ) -> BackgroundAgentTask:
         """
         Create a background task and enqueue it.
 
-        Uses the same executor and post_execution callbacks as sync tasks.
+        Supports two modes:
+        1. In-memory mode: Creates a wrapper function with the executor embedded
+        2. Celery mode: Uses executor_name to reference a registered executor
+
         The task manager creates a wrapper that implements the unified execution flow:
         1. Check if interrupted - if so, don't execute
         2. Run the agent via executor
@@ -188,9 +235,10 @@ class TaskManager:
         Args:
             chat: The chat metadata
             interaction_id: The interaction ID this task is for
-            executor: Callback to run the agent (same as sync tasks)
-            post_execution: Callback to run after successful execution (same as sync tasks)
+            executor: Callback to run the agent (for in-memory mode)
+            post_execution: Callback after successful execution (for in-memory mode)
             executor_payload: Payload to be passed to the executor
+            executor_name: Name of registered executor (for Celery mode)
 
         Returns:
             The created BackgroundAgentTask (already enqueued)
@@ -198,7 +246,7 @@ class TaskManager:
         queue_id = self._get_queue_id_for_chat(chat, interaction_id)
         now = datetime.now(timezone.utc)
 
-        # Create wrapper that implements the unified execution flow
+        # Create wrapper that implements the unified execution flow (for in-memory mode)
         async def execution_wrapper(task: BackgroundAgentTask) -> Optional[AgentOutput]:
             # Check if interrupted before starting
             if await self.is_task_interrupted(task.id):
@@ -213,6 +261,8 @@ class TaskManager:
 
             return response
 
+        # Note: Payload serialization is handled by the caller (orchestrator).
+        # For background mode, the payload should already be JSON-serializable.
         task = BackgroundAgentTask(
             id=str(uuid4()),
             queue_id=queue_id,
@@ -222,6 +272,7 @@ class TaskManager:
             created_at=now,
             updated_at=now,
             executor=execution_wrapper,
+            executor_name=executor_name,
             payload=executor_payload,
         )
 
@@ -229,8 +280,10 @@ class TaskManager:
         async with self._lock:
             self._task_queue_mapping[task.id] = queue_id
 
-        # Enqueue the task - queue manager will execute it via task.execute()
-        await self._queue_manager.enqueue(queue_id, task)
+        # Enqueue the task - queue manager will execute it
+        # For in-memory: uses task.executor
+        # For Celery: uses executor_name to look up in registry
+        await self._queue_manager.enqueue(queue_id, task, executor_name=executor_name)
 
         return task
 
@@ -397,3 +450,106 @@ class TaskManager:
         # interaction_id is unused but kept for future routing flexibility
         _ = interaction_id
         return chat.chat_id
+
+    # -------------------------------------------------------------------------
+    # Lifecycle Management
+    # -------------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """
+        Start the task manager and its underlying queue manager.
+
+        This must be called before enqueueing background tasks.
+        For Celery mode, register executors before calling start().
+        """
+        await self._queue_manager.start()
+
+    async def stop(self) -> None:
+        """
+        Stop the task manager gracefully.
+
+        Shuts down the queue manager and waits for running tasks to complete.
+        """
+        await self._queue_manager.stop()
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True if the task manager (queue) is running."""
+        return self._queue_manager.is_running
+
+    async def __aenter__(self) -> "TaskManager":
+        """Start the task manager when entering context."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Stop the task manager when exiting context."""
+        await self.stop()
+
+    # -------------------------------------------------------------------------
+    # Executor Registration (for Celery/distributed mode)
+    # -------------------------------------------------------------------------
+
+    def register_executor(
+        self,
+        name: str,
+        executor: TaskExecutor,
+        post_execution: Optional[PostExecution] = None,
+    ) -> None:
+        """
+        Register an executor function for distributed execution.
+
+        For Celery mode, executors must be registered by name so workers
+        can look them up. The executor and post_execution are wrapped together.
+
+        Args:
+            name: Unique name for the executor
+            executor: The async function that runs the task
+            post_execution: Optional callback after successful execution
+
+        Example:
+            task_manager.register_executor(
+                "run_agent",
+                executor=orchestrator._run_agent_for_task,
+                post_execution=orchestrator._persist_assistant_response,
+            )
+        """
+
+        async def wrapped_executor(task: BackgroundAgentTask) -> Optional[AgentOutput]:
+            """Wrapper that implements the unified execution flow."""
+            # Check if interrupted before starting
+            if await self.is_task_interrupted(task.id):
+                return None
+
+            # Run the agent with payload kwargs
+            response = await executor(task, **task.payload)
+
+            # Check if interrupted during execution - if not, call post_execution
+            if post_execution and not await self.is_task_interrupted(task.id):
+                await post_execution(task, response)
+
+            return response
+
+        self._executor_registry.add(name, wrapped_executor)
+
+    def executor(
+        self, name: str, post_execution: Optional[PostExecution] = None
+    ) -> Callable[[TaskExecutor], TaskExecutor]:
+        """
+        Decorator to register an executor function.
+
+        Args:
+            name: Unique name for the executor
+            post_execution: Optional callback after successful execution
+
+        Example:
+            @task_manager.executor("run_agent", post_execution=persist_response)
+            async def run_agent(task: AgentTask, chat: ChatMetadata, **kwargs):
+                ...
+        """
+
+        def decorator(func: TaskExecutor) -> TaskExecutor:
+            self.register_executor(name, func, post_execution)
+            return func
+
+        return decorator
