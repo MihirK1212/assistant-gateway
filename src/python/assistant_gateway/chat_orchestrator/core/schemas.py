@@ -74,19 +74,33 @@ class SynchronousAgentTask(AgentTask):
 class BackgroundAgentTask(AgentTask):
     """Task for background execution mode with queue support.
 
-    The executor is embedded in the task itself, making the task self-contained.
-    The queue manager simply calls the executor to run the task.
+    Supports two execution modes:
+    1. Embedded executor (in-memory): Set `executor` directly on the task
+    2. Named executor (Celery): Set `executor_name` to reference a registered executor
+
+    For Celery/distributed execution:
+    - The executor function cannot be serialized, so it must be registered by name
+    - Use `executor_name` to reference the registered executor
+    - The Celery worker looks up the executor from the registry and calls it
     """
 
     model_config = {"arbitrary_types_allowed": True}
 
     queue_id: str = Field(description="The queue ID where this task is scheduled")
+
+    # For in-memory execution: embedded executor function
     executor: Optional[Callable[["BackgroundAgentTask"], Awaitable[AgentOutput]]] = (
         Field(
             default=None,
             exclude=True,  # Don't serialize the executor
-            description="The async function that executes this task and returns AgentOutput",
+            description="The async function that executes this task (for in-memory mode)",
         )
+    )
+
+    # For distributed execution: name of registered executor
+    executor_name: Optional[str] = Field(
+        default=None,
+        description="Name of the registered executor function (for Celery mode)",
     )
 
     is_background: Literal[True] = Field(default=True, frozen=True)
@@ -94,7 +108,10 @@ class BackgroundAgentTask(AgentTask):
     async def execute(self) -> AgentOutput:
         """Execute this task using the embedded executor."""
         if self.executor is None:
-            raise RuntimeError("Task executor not set")
+            raise RuntimeError(
+                "Task executor not set. For in-memory mode, set task.executor. "
+                "For Celery mode, the worker handles execution via executor_name."
+            )
         return await self.executor(self)
 
 

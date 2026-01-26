@@ -1,8 +1,20 @@
+"""
+Conversation Orchestrator for the Chat System.
+
+Coordinates chat lifecycle, persistence, background processing, and agent
+session reuse. Supports both synchronous and background execution modes.
+
+For Celery/distributed execution:
+- Register executors at startup using `register_executors()`
+- Celery workers must import this module to access the registered executors
+"""
+
 from __future__ import annotations
+
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -21,7 +33,12 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
 from assistant_gateway.chat_orchestrator.orchestration.agent_session_manager import (
     AgentSessionManager,
 )
-from assistant_gateway.chat_orchestrator.orchestration.task_manager import TaskManager
+from assistant_gateway.chat_orchestrator.orchestration.task_manager import (
+    AgentTaskManager,
+)
+from assistant_gateway.chat_orchestrator.orchestration.serialization import (
+    RunAgentExecutorPayload,
+)
 from assistant_gateway.schemas import AgentOutput, Role, UserInput
 
 
@@ -36,9 +53,20 @@ class ConversationOrchestrator:
 
     Architecture:
     - Sync tasks: Executed directly by the orchestrator
-    - Background tasks: Submitted to queue manager, which executes them
-    """
+    - Background tasks: Submitted to task manager's queue for execution
 
+    Lifecycle:
+    - Call start() to register executors and start background task processing
+    - Call stop() for graceful shutdown
+    - Can be used as async context manager:
+
+        async with ConversationOrchestrator(config=config) as orchestrator:
+            await orchestrator.send_message(...)
+
+    For Celery workers:
+    - Just call start() - it registers executors automatically
+    - Celery workers must have the same orchestrator setup to access executors
+    """
     def __init__(
         self,
         *,
@@ -46,8 +74,7 @@ class ConversationOrchestrator:
     ) -> None:
         self._config = config
         self._chat_store = self._config.get_chat_store()
-        self._queue_manager = self._config.get_queue_manager()
-        self._task_manager = TaskManager(self._queue_manager)
+        self._task_manager = AgentTaskManager(self._config.get_queue_manager())
         self._chat_locks: Dict[str, asyncio.Lock] = {}
 
         agent_configs = self._config.get_agent_configs()
@@ -271,35 +298,48 @@ class ConversationOrchestrator:
         # Step 1: Get the last user input interaction
         user_input_interaction = await self._get_last_user_input_interaction(chat)
 
-        # Step 2: Create and execute task (sync or background based on flag)
+        # Step 2: Build the executor payload
+        payload = RunAgentExecutorPayload(
+            chat=chat,
+            user_context=user_context,
+            backend_server_context=backend_server_context,
+        )
+
+        # Step 3: Serialize payload
+        executor_payload = payload.serialize()
+
+        # Step 4: Create and execute task (sync or background based on flag)
         task, assistant_response = await self._task_manager.create_and_execute_task(
             chat=chat,
             interaction_id=user_input_interaction.id,
             executor=self._run_agent_for_task,
             post_execution=self._persist_assistant_response,
-            executor_payload={
-                "chat": chat,
-                "user_context": user_context,
-                "backend_server_context": backend_server_context,
-            },
+            executor_payload=executor_payload,
             run_in_background=run_in_background,
+            executor_name="orchestrator.run_agent" if run_in_background else None,
         )
         await self._add_task_to_chat(chat, task)
         return chat, assistant_response, task
 
     async def _run_agent_for_task(
-        self,
-        task: AgentTask,
-        chat: ChatMetadata,
-        user_context: Optional[UserContext] = None,
-        backend_server_context: Optional[BackendServerContext] = None,
+        self, task: AgentTask, executor_payload: dict[str, Any]
     ) -> AgentOutput:
         """
-        Run the agent for a task and persist the response.
+        Run the agent for a task.
+
+        This method handles both sync and background execution:
+        - Sync mode: Receives Pydantic objects directly via kwargs
+        - Background/Celery mode: Receives serialized dicts in task.payload
 
         Note: Interrupt checking should be done by the caller before/after
         calling this method. For background tasks, the queue manager handles it.
         """
+        payload = RunAgentExecutorPayload.deserialize(executor_payload)
+
+        chat = payload.chat
+        user_context = payload.user_context
+        backend_server_context = payload.backend_server_context
+
         # Get interactions up to the specified interaction
         interactions = await self._get_interactions_up_to(
             chat.chat_id, task.interaction_id

@@ -1,20 +1,15 @@
-import os
-
 from assistant_gateway.chat_orchestrator.chat.store import InMemoryChatStore
 from assistant_gateway.chat_orchestrator.core.config import (
     AgentConfig,
     GatewayConfig,
     GatewayDefaultFallbackConfig,
 )
-from assistant_gateway.chat_orchestrator.tasks_queue_manager import (
-    InMemoryTasksQueueManager,
-)
+from assistant_gateway.clauq_btm import InMemoryQueueManager
 from assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.config.agent import (
     build_calculator_agent,
 )
 
-import os 
-import dotenv 
+import dotenv
 
 dotenv.load_dotenv()
 
@@ -40,5 +35,5 @@ def build_gateway_config() -> GatewayConfig:
         },
         default_fallback_config=default_fallback,
         chat_store=InMemoryChatStore(),
-        queue_manager=InMemoryTasksQueueManager(),
+        queue_manager=InMemoryQueueManager(),
     )
