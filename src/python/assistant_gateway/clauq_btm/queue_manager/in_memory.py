@@ -1,5 +1,5 @@
 """
-In-memory Task Queue Manager implementation.
+In-memory Queue Manager implementation.
 
 This implementation uses asyncio for single-process task execution.
 Suitable for development, testing, and single-instance deployments.
@@ -21,15 +21,13 @@ from typing import (
     Set,
 )
 
-from assistant_gateway.chat_orchestrator.core.schemas import BackgroundAgentTask
-from assistant_gateway.chat_orchestrator.tasks_queue_manager.base import (
+from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
+from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
+from assistant_gateway.clauq_btm.queue_manager.base import (
     EventSubscription,
     QueueInfo,
-    TaskEvent,
-    TaskEventType,
-    TasksQueueManager,
+    QueueManager,
 )
-from assistant_gateway.schemas import TaskStatus
 
 
 # -----------------------------------------------------------------------------
@@ -77,11 +75,11 @@ class AsyncioEventSubscription(EventSubscription):
 
 
 # -----------------------------------------------------------------------------
-# InMemoryTasksQueueManager
+# InMemoryQueueManager
 # -----------------------------------------------------------------------------
 
 
-class InMemoryTasksQueueManager(TasksQueueManager):
+class InMemoryQueueManager(QueueManager):
     """
     In-memory queue manager that processes tasks sequentially per queue.
 
@@ -96,19 +94,19 @@ class InMemoryTasksQueueManager(TasksQueueManager):
     - Call stop() for graceful shutdown
     - Can be used as async context manager:
 
-        async with InMemoryTasksQueueManager() as qm:
-            await qm.enqueue(...)
+        async with InMemoryQueueManager() as qm:
+            await qm.enqueue(task)
 
     Note: This implementation does not persist state. All tasks are lost
-    on restart. For production use with persistence, use CeleryTasksQueueManager.
+    on restart. For production use with persistence, use CeleryQueueManager.
     """
 
     def __init__(self) -> None:
         # Task queues: queue_id -> deque of pending tasks
-        self._queues: Dict[str, Deque[BackgroundAgentTask]] = {}
+        self._queues: Dict[str, Deque[ClauqBTMTask]] = {}
 
         # Currently executing task per queue: queue_id -> task
-        self._current_tasks: Dict[str, BackgroundAgentTask] = {}
+        self._current_tasks: Dict[str, ClauqBTMTask] = {}
 
         # Maps task_id -> running asyncio.Task for cancellation
         self._running_asyncio_tasks: Dict[str, asyncio.Task[Any]] = {}
@@ -126,7 +124,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
         self._subscriptions: Dict[str, List[AsyncioEventSubscription]] = {}
 
         # Store completed/interrupted tasks that were removed from queue
-        self._completed_tasks: Dict[str, BackgroundAgentTask] = {}
+        self._completed_tasks: Dict[str, ClauqBTMTask] = {}
 
         # Lifecycle state
         self._is_running = False
@@ -314,7 +312,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
                 break
 
             # Get the next task from the front of the queue
-            task: Optional[BackgroundAgentTask] = None
+            task: Optional[ClauqBTMTask] = None
             async with self._lock:
                 queue = self._queues.get(queue_id)
                 if queue:
@@ -339,7 +337,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
                 async with self._lock:
                     self._current_tasks.pop(queue_id, None)
 
-    async def _execute_task(self, queue_id: str, task: BackgroundAgentTask) -> None:
+    async def _execute_task(self, queue_id: str, task: ClauqBTMTask) -> None:
         """
         Execute a task using the provided executor.
         Handles status updates and completion notifications.
@@ -429,8 +427,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
 
     async def enqueue(
         self,
-        queue_id: str,
-        task: BackgroundAgentTask,
+        task: ClauqBTMTask,
         executor_name: Optional[str] = None,
     ) -> None:
         """
@@ -440,7 +437,6 @@ class InMemoryTasksQueueManager(TasksQueueManager):
         in FIFO order relative to other tasks in the same queue.
 
         Args:
-            queue_id: The queue to add the task to
             task: The task to enqueue (must have executor set)
             executor_name: Ignored for in-memory (executor must be on task)
         """
@@ -451,6 +447,8 @@ class InMemoryTasksQueueManager(TasksQueueManager):
                 "Task executor not set. Set task.executor before enqueueing."
             )
 
+        queue_id = task.queue_id
+
         async with self._lock:
             # Initialize queue if needed
             if queue_id not in self._queues:
@@ -458,9 +456,6 @@ class InMemoryTasksQueueManager(TasksQueueManager):
                 self._work_available[queue_id] = asyncio.Event()
                 self._known_queues.add(queue_id)
                 self._queue_created_at[queue_id] = datetime.now(timezone.utc)
-
-            # Ensure queue_id is set on task
-            task.queue_id = queue_id
 
             # Add task to queue
             self._queues[queue_id].append(task)
@@ -477,7 +472,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
             queue_id, TaskEvent.from_task(TaskEventType.QUEUED, task)
         )
 
-    async def get(self, queue_id: str, task_id: str) -> Optional[BackgroundAgentTask]:
+    async def get(self, queue_id: str, task_id: str) -> Optional[ClauqBTMTask]:
         """Get a task by ID. Checks completed tasks, current task, and queue."""
         async with self._lock:
             # Check completed tasks first
@@ -496,7 +491,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
 
         return None
 
-    async def update(self, queue_id: str, task: BackgroundAgentTask) -> None:
+    async def update(self, queue_id: str, task: ClauqBTMTask) -> None:
         """Update a task in the queue."""
         async with self._lock:
             # Check if it's the current task
@@ -533,7 +528,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
             # Clean up completion event
             self._completion_events.pop(task_id, None)
 
-    async def list(self, queue_id: str) -> List[BackgroundAgentTask]:
+    async def list_tasks(self, queue_id: str) -> List[ClauqBTMTask]:
         """List all tasks: current task (if any) + pending queue."""
         async with self._lock:
             result = []
@@ -550,7 +545,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
 
     async def interrupt(
         self, queue_id: str, task_id: str
-    ) -> Optional[BackgroundAgentTask]:
+    ) -> Optional[ClauqBTMTask]:
         """
         Interrupt a running or pending task.
 
@@ -558,7 +553,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
         - If task is pending in queue, removes it
         - Marks the task as interrupted
         """
-        task: Optional[BackgroundAgentTask] = None
+        task: Optional[ClauqBTMTask] = None
         was_current = False
 
         async with self._lock:
@@ -619,7 +614,7 @@ class InMemoryTasksQueueManager(TasksQueueManager):
 
     async def wait_for_completion(
         self, queue_id: str, task_id: str, timeout: Optional[float] = None
-    ) -> Optional[BackgroundAgentTask]:
+    ) -> Optional[ClauqBTMTask]:
         """Wait for a task to complete, fail, or be interrupted."""
         # Check if already completed
         async with self._lock:

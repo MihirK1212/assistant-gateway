@@ -33,8 +33,10 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
 from assistant_gateway.chat_orchestrator.orchestration.agent_session_manager import (
     AgentSessionManager,
 )
-from assistant_gateway.chat_orchestrator.orchestration.task_manager import TaskManager
-from assistant_gateway.chat_orchestrator.orchestration.utils import (
+from assistant_gateway.chat_orchestrator.orchestration.task_manager import (
+    AgentTaskManager,
+)
+from assistant_gateway.chat_orchestrator.orchestration.serialization import (
     RunAgentExecutorPayload,
 )
 from assistant_gateway.schemas import AgentOutput, Role, UserInput
@@ -65,8 +67,6 @@ class ConversationOrchestrator:
     - Just call start() - it registers executors automatically
     - Celery workers must have the same orchestrator setup to access executors
     """
-    _EXECUTOR_NAME_RUN_AGENT = "orchestrator.run_agent"
-
     def __init__(
         self,
         *,
@@ -74,7 +74,7 @@ class ConversationOrchestrator:
     ) -> None:
         self._config = config
         self._chat_store = self._config.get_chat_store()
-        self._task_manager = TaskManager(self._config.get_queue_manager())
+        self._task_manager = AgentTaskManager(self._config.get_queue_manager())
         self._chat_locks: Dict[str, asyncio.Lock] = {}
 
         agent_configs = self._config.get_agent_configs()
@@ -305,12 +305,8 @@ class ConversationOrchestrator:
             backend_server_context=backend_server_context,
         )
 
-        # Step 3: Serialize payload for background mode (Celery requires JSON-serializable data)
-        # For sync mode, pass the payload as-is (objects work fine in-process)
-        executor_payload: Dict[str, Any]
-        executor_payload = (
-            payload.serialize() if run_in_background else payload.deserialize()
-        )
+        # Step 3: Serialize payload
+        executor_payload = payload.serialize()
 
         # Step 4: Create and execute task (sync or background based on flag)
         task, assistant_response = await self._task_manager.create_and_execute_task(
@@ -320,12 +316,14 @@ class ConversationOrchestrator:
             post_execution=self._persist_assistant_response,
             executor_payload=executor_payload,
             run_in_background=run_in_background,
-            executor_name=self._EXECUTOR_NAME_RUN_AGENT if run_in_background else None,
+            executor_name="orchestrator.run_agent" if run_in_background else None,
         )
         await self._add_task_to_chat(chat, task)
         return chat, assistant_response, task
 
-    async def _run_agent_for_task(self, task: AgentTask) -> AgentOutput:
+    async def _run_agent_for_task(
+        self, task: AgentTask, executor_payload: dict[str, Any]
+    ) -> AgentOutput:
         """
         Run the agent for a task.
 
@@ -336,7 +334,7 @@ class ConversationOrchestrator:
         Note: Interrupt checking should be done by the caller before/after
         calling this method. For background tasks, the queue manager handles it.
         """
-        payload = RunAgentExecutorPayload.deserialize(task.payload)
+        payload = RunAgentExecutorPayload.deserialize(executor_payload)
 
         chat = payload.chat
         user_context = payload.user_context
@@ -451,57 +449,3 @@ class ConversationOrchestrator:
             yield
         finally:
             lock.release()
-
-    # -------------------------------------------------------------------------
-    # Lifecycle Management
-    # -------------------------------------------------------------------------
-
-    def _register_executors(self) -> None:
-        """
-        Register executor functions for background task execution.
-
-        This is called automatically by start(). For Celery workers,
-        this ensures the executors are available in the registry.
-        """
-        self._task_manager.register_executor(
-            name=self._EXECUTOR_NAME_RUN_AGENT,
-            executor=self._run_agent_for_task,
-            post_execution=self._persist_assistant_response,
-        )
-
-    async def start(self) -> None:
-        """
-        Start the orchestrator's background services.
-
-        This must be called before processing background tasks.
-        Registers executors and starts the task manager's queue processing.
-
-        For Celery workers:
-            config = get_config()
-            orchestrator = ConversationOrchestrator(config=config)
-            await orchestrator.start()  # Registers executors for Celery
-        """
-        self._register_executors()
-        await self._task_manager.start()
-
-    async def stop(self) -> None:
-        """
-        Stop the orchestrator gracefully.
-
-        Shuts down the task manager and waits for running tasks to complete.
-        """
-        await self._task_manager.stop()
-
-    @property
-    def is_running(self) -> bool:
-        """Returns True if the orchestrator is running."""
-        return self._task_manager.is_running
-
-    async def __aenter__(self) -> "ConversationOrchestrator":
-        """Start the orchestrator when entering context."""
-        await self.start()
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Stop the orchestrator when exiting context."""
-        await self.stop()
