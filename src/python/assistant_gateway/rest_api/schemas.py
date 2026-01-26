@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from assistant_gateway.schemas import AgentOutput, AgentInteraction
+from assistant_gateway.schemas import AgentOutput, UserInput
 from assistant_gateway.chat_orchestrator.core.schemas import (
     BackgroundAgentTask,
     SynchronousAgentTask,
@@ -49,7 +49,7 @@ class SendMessageResponse(BaseModel):
 
 class ChatInteractionsResponse(BaseModel):
     chat_id: str
-    interactions: List[AgentInteraction]
+    interactions: List[Union[UserInput, AgentOutput]]
 
 
 class ChatResponse(BaseModel):
