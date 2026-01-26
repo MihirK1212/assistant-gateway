@@ -1,9 +1,20 @@
+"""
+Task Manager for the Chat Orchestrator.
+
+A thin wrapper around clauq_btm that handles transformation between
+agent-specific task types (AgentTask, SynchronousAgentTask, BackgroundAgentTask)
+and the generic ClauqBTMTask.
+
+All task management logic (execution, interrupt, wait) is delegated to clauq_btm.
+This module only handles:
+1. Creating BTM tasks with agent-specific metadata
+2. Wrapping BTM tasks in agent task types
+3. Reconstructing agent tasks from BTM tasks via get_task
+"""
+
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Union
-from uuid import uuid4
 
 from assistant_gateway.chat_orchestrator.core.schemas import (
     AgentTask,
@@ -11,268 +22,154 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
     ChatMetadata,
     SynchronousAgentTask,
 )
-from assistant_gateway.chat_orchestrator.tasks_queue_manager import TasksQueueManager
-from assistant_gateway.schemas import AgentOutput, TaskStatus
+from assistant_gateway.clauq_btm import (
+    BTMTaskManager,
+    ClauqBTMTask,
+    QueueManager,
+)
+from assistant_gateway.schemas import AgentOutput
 
 
-# Type alias for task executor: (task, **payload) -> AgentOutput
-# The executor receives the task and unpacked payload kwargs
-TaskExecutor = Callable[..., Awaitable[AgentOutput]]
+# Type alias for task executor: (task, executor_payload) -> AgentOutput
+AgentTaskExecutor = Callable[[AgentTask, Dict[str, Any]], Awaitable[AgentOutput]]
 
 # Type alias for post-execution callback: (task, response) -> None
 PostExecution = Callable[[AgentTask, AgentOutput], Awaitable[None]]
 
 
-class TaskManager:
+# Metadata keys for agent-specific data
+METADATA_CHAT_ID = "chat_id"
+METADATA_INTERACTION_ID = "interaction_id"
+METADATA_IS_BACKGROUND = "is_background"
+
+
+class AgentTaskManager:
     """
-    Manages task creation, queue assignment, and task-to-queue mapping.
+    Wrapper around BTMTaskManager for agent-specific task handling.
 
-    This module provides a clean interface for:
-    - Creating tasks for sync and background execution modes
-    - Determining the queue_id for background tasks
-    - Tracking which tasks are scheduled to which queues
-    - Managing sync task lifecycle (background tasks are managed by the queue)
+    This class provides a bridge between the chat orchestration layer and
+    the generic clauq_btm task manager. It handles:
+    - Converting agent-specific data to BTM task metadata
+    - Wrapping BTM tasks in SynchronousAgentTask/BackgroundAgentTask
+    - Reconstructing agent tasks from BTM tasks
 
-    Note: Background task execution is handled by the QueueManager.
-    The manager just creates and enqueues tasks.
+    All actual task management (execution, interrupt, wait) is delegated to clauq_btm.
+
+    Usage:
+        queue_manager = InMemoryQueueManager()
+        task_manager = TaskManager(queue_manager)
+
+        async with task_manager:
+            task, response = await task_manager.create_and_execute_task(
+                chat=chat_metadata,
+                interaction_id="...",
+                executor=my_executor,
+                post_execution=my_callback,
+                executor_payload={...},
+                run_in_background=False,
+            )
     """
 
-    def __init__(self, queue_manager: TasksQueueManager) -> None:
-        self._queue_manager = queue_manager
-        self._lock = asyncio.Lock()
+    def __init__(self, queue_manager: QueueManager) -> None:
+        """
+        Initialize the TaskManager.
 
-        # Maps task_id -> queue_id for background tasks
-        self._task_queue_mapping: Dict[str, str] = {}
+        Args:
+            queue_manager: The clauq_btm queue manager for task execution
+        """
+        self._btm_manager = BTMTaskManager(queue_manager)
 
-        # Maps task_id -> SynchronousAgentTask for sync tasks
-        self._sync_tasks: Dict[str, SynchronousAgentTask] = {}
+    # -------------------------------------------------------------------------
+    # Task Creation and Execution
+    # -------------------------------------------------------------------------
 
     async def create_and_execute_task(
         self,
         chat: ChatMetadata,
         interaction_id: str,
-        executor: TaskExecutor,
+        executor: AgentTaskExecutor,
         post_execution: PostExecution,
         executor_payload: Dict[str, Any],
         run_in_background: bool = False,
+        executor_name: Optional[str] = None,
     ) -> Tuple[Union[SynchronousAgentTask, BackgroundAgentTask], Optional[AgentOutput]]:
         """
         Create and execute a task, either synchronously or in background.
 
-        This is the unified entry point for task creation and execution.
-        Based on run_in_background flag, delegates to the appropriate method.
-
         Args:
             chat: The chat metadata
             interaction_id: The interaction ID this task is for
             executor: Callback to run the agent
-            post_execution: Callback to run after successful execution (e.g., persist response)
+            post_execution: Callback after successful execution
             executor_payload: Payload to be passed to the executor
-            run_in_background: If True, enqueue task for background execution; otherwise execute synchronously
+            run_in_background: If True, enqueue for background execution
+            executor_name: Name for the executor (required for background mode)
 
         Returns:
-            Tuple of (task, response) where:
+            Tuple of (agent_task, response) where:
             - For sync mode: response is the AgentOutput (or None if interrupted)
-            - For background mode: response is always None (task executes asynchronously)
+            - For background mode: response is always None
         """
+        queue_id = self._get_queue_id_for_chat(chat)
+        metadata = {
+            METADATA_CHAT_ID: chat.chat_id,
+            METADATA_INTERACTION_ID: interaction_id,
+            METADATA_IS_BACKGROUND: run_in_background,
+        }
+
+        # Create BTM executor wrapper that bridges to agent executor
+        async def btm_executor(btm_task: ClauqBTMTask) -> AgentOutput:
+            agent_task = self._btm_to_agent_task(btm_task)
+            return await executor(agent_task, btm_task.payload)
+
+        # Create BTM post-execution wrapper
+        async def btm_post_execution(btm_task: ClauqBTMTask, result: Any) -> None:
+            agent_task = self._btm_to_agent_task(btm_task)
+            await post_execution(agent_task, result)
+
         if run_in_background:
-            task = await self._create_and_enqueue_background_task(
-                chat=chat,
-                interaction_id=interaction_id,
-                executor=executor,
-                post_execution=post_execution,
-                executor_payload=executor_payload,
+            if executor_name is None:
+                raise ValueError("executor_name is required for background execution")
+
+            btm_task = await self._btm_manager.create_and_enqueue(
+                queue_id=queue_id,
+                executor=btm_executor,
+                executor_name=executor_name,
+                post_execution=btm_post_execution,
+                payload=executor_payload,
+                metadata=metadata,
             )
-            return task, None
+            return self._btm_to_agent_task(btm_task), None
         else:
-            return await self._create_and_execute_sync_task(
-                chat=chat,
-                interaction_id=interaction_id,
-                executor=executor,
-                post_execution=post_execution,
-                executor_payload=executor_payload,
+            btm_task, result = await self._btm_manager.create_and_execute_sync(
+                queue_id=queue_id,
+                executor=btm_executor,
+                post_execution=btm_post_execution,
+                payload=executor_payload,
+                metadata=metadata,
             )
-
-    async def _create_and_execute_sync_task(
-        self,
-        chat: ChatMetadata,
-        interaction_id: str,
-        executor: TaskExecutor,
-        post_execution: PostExecution,
-        executor_payload: Dict[str, Any],
-    ) -> Tuple[SynchronousAgentTask, Optional[AgentOutput]]:
-        """
-        Create and execute a synchronous task directly.
-
-        Sync tasks are not queued - they run inline with the request.
-        This method handles the full task lifecycle:
-        1. Create the task
-        2. Check if interrupted - if so, don't execute
-        3. Set status to in_progress
-        4. Run the agent via executor
-        5. Check if interrupted during execution - if not, call post_execution
-
-        Args:
-            chat: The chat metadata
-            interaction_id: The interaction ID this task is for
-            executor: Callback to run the agent
-            post_execution: Callback to run after successful execution (e.g., persist response)
-            executor_payload: Payload to be passed to the executor
-
-        Returns:
-            Tuple of (task, response) where response is None if interrupted
-        """
-        # Create and register the task
-        now = datetime.now(timezone.utc)
-        task = SynchronousAgentTask(
-            id=str(uuid4()),
-            chat_id=chat.chat_id,
-            interaction_id=interaction_id,
-            status=TaskStatus.pending,
-            created_at=now,
-            updated_at=now,
-            payload=executor_payload,
-        )
-
-        async with self._lock:
-            self._sync_tasks[task.id] = task
-
-        # Check if already interrupted before starting
-        if await self.is_task_interrupted(task.id):
-            await self._update_sync_task_status(task, TaskStatus.interrupted)
-            return task, None
-
-        # Update task to in_progress
-        await self._update_sync_task_status(task, TaskStatus.in_progress)
-
-        try:
-            # Run the agent
-            response = await executor(task, **task.payload)
-
-            # Check if task was interrupted during execution
-            if await self.is_task_interrupted(task.id):
-                await self._update_sync_task_status(task, TaskStatus.interrupted)
-                return task, None
-
-            # Post-execution (e.g., persist the response)
-            await post_execution(task, response)
-
-            # Task completed successfully
-            await self._update_sync_task_status(task, TaskStatus.completed)
-            return task, response
-
-        except Exception as exc:
-            task.error = str(exc)
-            await self._update_sync_task_status(task, TaskStatus.failed)
-            raise
-
-    async def _create_and_enqueue_background_task(
-        self,
-        chat: ChatMetadata,
-        interaction_id: str,
-        executor: TaskExecutor,
-        post_execution: PostExecution,
-        executor_payload: Dict[str, Any],
-    ) -> BackgroundAgentTask:
-        """
-        Create a background task and enqueue it.
-
-        Uses the same executor and post_execution callbacks as sync tasks.
-        The task manager creates a wrapper that implements the unified execution flow:
-        1. Check if interrupted - if so, don't execute
-        2. Run the agent via executor
-        3. Check if interrupted during execution - if not, call post_execution
-
-        Note: Status updates (in_progress, completed, failed) are handled by the queue manager.
-
-        Args:
-            chat: The chat metadata
-            interaction_id: The interaction ID this task is for
-            executor: Callback to run the agent (same as sync tasks)
-            post_execution: Callback to run after successful execution (same as sync tasks)
-            executor_payload: Payload to be passed to the executor
-
-        Returns:
-            The created BackgroundAgentTask (already enqueued)
-        """
-        queue_id = self._get_queue_id_for_chat(chat, interaction_id)
-        now = datetime.now(timezone.utc)
-
-        # Create wrapper that implements the unified execution flow
-        async def execution_wrapper(task: BackgroundAgentTask) -> Optional[AgentOutput]:
-            # Check if interrupted before starting
-            if await self.is_task_interrupted(task.id):
-                return None
-
-            # Run the agent
-            response = await executor(task, **task.payload)
-
-            # Check if interrupted during execution - if not, call post_execution
-            if not await self.is_task_interrupted(task.id):
-                await post_execution(task, response)
-
-            return response
-
-        task = BackgroundAgentTask(
-            id=str(uuid4()),
-            queue_id=queue_id,
-            chat_id=chat.chat_id,
-            interaction_id=interaction_id,
-            status=TaskStatus.pending,
-            created_at=now,
-            updated_at=now,
-            executor=execution_wrapper,
-            payload=executor_payload,
-        )
-
-        # Track the mapping before enqueueing
-        async with self._lock:
-            self._task_queue_mapping[task.id] = queue_id
-
-        # Enqueue the task - queue manager will execute it via task.execute()
-        await self._queue_manager.enqueue(queue_id, task)
-
-        return task
+            return self._btm_to_agent_task(btm_task), result
 
     # -------------------------------------------------------------------------
-    # Public Task Operations
+    # Task Operations (delegated to BTM manager)
     # -------------------------------------------------------------------------
 
     async def get_task(
         self, task_id: str
     ) -> Optional[Union[SynchronousAgentTask, BackgroundAgentTask]]:
         """
-        Get a task by ID, checking both sync and background task stores.
+        Get a task by ID and reconstruct the agent task from BTM task.
 
         Args:
             task_id: The task ID to look up
 
         Returns:
-            The task if found, None otherwise
+            The agent task if found, None otherwise
         """
-
-        async def _get_sync_task(task_id: str) -> Optional[SynchronousAgentTask]:
-            """Get a synchronous task by ID."""
-            async with self._lock:
-                return self._sync_tasks.get(task_id)
-
-        async def _get_background_task(task_id: str) -> Optional[BackgroundAgentTask]:
-            """Get a background task by ID from the queue manager."""
-            async with self._lock:
-                queue_id = self._task_queue_mapping.get(task_id)
-
-            if queue_id is None:
-                return None
-
-            return await self._queue_manager.get(queue_id, task_id)
-
-        # Try sync tasks first
-        task = await _get_sync_task(task_id)
-        if task is not None:
-            return task
-
-        # Fall back to background tasks
-        return await _get_background_task(task_id)
+        btm_task = await self._btm_manager.get_task(task_id)
+        if btm_task is None:
+            return None
+        return self._btm_to_agent_task(btm_task)
 
     async def interrupt_task(
         self, task_id: str
@@ -284,20 +181,12 @@ class TaskManager:
             task_id: The task ID to interrupt
 
         Returns:
-            The interrupted task, or None if not found
+            The interrupted agent task, or None if not found
         """
-        task = await self.get_task(task_id)
-        if task is None:
+        btm_task = await self._btm_manager.interrupt_task(task_id)
+        if btm_task is None:
             return None
-
-        # Already in terminal state - nothing to do
-        if task.is_terminal():
-            return task
-
-        if task.is_background:
-            return await self._interrupt_background_task(task.id)
-        else:
-            return await self._interrupt_sync_task(task.id)
+        return self._btm_to_agent_task(btm_task)
 
     async def wait_for_background_task(
         self, task_id: str, timeout: Optional[float] = None
@@ -310,90 +199,92 @@ class TaskManager:
             timeout: Optional timeout in seconds
 
         Returns:
-            The final task state, or None if not found or timeout occurs
+            The final agent task state, or None if not found or timeout
         """
-        queue_id = await self._get_queue_id_for_task(task_id)
-        if queue_id is None:
+        btm_task = await self._btm_manager.wait_for_completion(task_id, timeout)
+        if btm_task is None:
             return None
-
-        return await self._queue_manager.wait_for_completion(queue_id, task_id, timeout)
+        agent_task = self._btm_to_agent_task(btm_task)
+        if isinstance(agent_task, BackgroundAgentTask):
+            return agent_task
+        return None
 
     async def is_task_interrupted(self, task_id: str) -> bool:
         """Check if a task has been interrupted."""
-        task = await self.get_task(task_id)
-        return task is not None and task.is_interrupted()
+        return await self._btm_manager.is_task_interrupted(task_id)
 
     # -------------------------------------------------------------------------
-    # Sync Task Management
+    # Conversion Helpers
     # -------------------------------------------------------------------------
 
-    async def _update_sync_task_status(
-        self, task: SynchronousAgentTask, status: TaskStatus
-    ) -> None:
-        """Update the status of a synchronous task."""
-        task.status = status
-        task.updated_at = datetime.now(timezone.utc)
-        async with self._lock:
-            if task.id in self._sync_tasks:
-                self._sync_tasks[task.id] = task
-
-    async def _interrupt_sync_task(
-        self, task_id: str
-    ) -> Optional[SynchronousAgentTask]:
+    def _btm_to_agent_task(
+        self, btm_task: ClauqBTMTask
+    ) -> Union[SynchronousAgentTask, BackgroundAgentTask]:
         """
-        Interrupt a synchronous task.
+        Convert a ClauqBTMTask to an agent-specific task type.
 
-        Note: Actual cancellation of running code must be handled by the caller.
+        Uses metadata to determine task type and populate agent-specific fields.
         """
-        async with self._lock:
-            task = self._sync_tasks.get(task_id)
-            if task and task.status in (TaskStatus.pending, TaskStatus.in_progress):
-                task.status = TaskStatus.interrupted
-                task.updated_at = datetime.now(timezone.utc)
-                self._sync_tasks[task_id] = task
-            return task
+        chat_id = btm_task.metadata.get(METADATA_CHAT_ID, "")
+        interaction_id = btm_task.metadata.get(METADATA_INTERACTION_ID, "")
+        is_background = btm_task.metadata.get(METADATA_IS_BACKGROUND, False)
 
-    # -------------------------------------------------------------------------
-    # Background Task Management
-    # -------------------------------------------------------------------------
+        if is_background:
+            return BackgroundAgentTask(
+                id=btm_task.id,
+                queue_id=btm_task.queue_id,
+                chat_id=chat_id,
+                interaction_id=interaction_id,
+                status=btm_task.status,
+                created_at=btm_task.created_at,
+                updated_at=btm_task.updated_at,
+                payload=btm_task.payload,
+                result=btm_task.result,
+                error=btm_task.error,
+            )
+        else:
+            return SynchronousAgentTask(
+                id=btm_task.id,
+                chat_id=chat_id,
+                interaction_id=interaction_id,
+                status=btm_task.status,
+                created_at=btm_task.created_at,
+                updated_at=btm_task.updated_at,
+                payload=btm_task.payload,
+                result=btm_task.result,
+                error=btm_task.error,
+            )
 
-    async def _get_queue_id_for_task(self, task_id: str) -> Optional[str]:
-        """Get the queue ID for a background task."""
-        async with self._lock:
-            return self._task_queue_mapping.get(task_id)
-
-    async def _interrupt_background_task(
-        self, task_id: str
-    ) -> Optional[BackgroundAgentTask]:
+    def _get_queue_id_for_chat(self, chat: ChatMetadata) -> str:
         """
-        Interrupt a background task.
+        Determine the queue_id for a given chat.
 
-        The queue manager handles cancellation of the running task.
+        Uses chat_id as queue_id to ensure sequential processing per chat.
         """
-        queue_id = await self._get_queue_id_for_task(task_id)
-        if queue_id is None:
-            return None
-
-        return await self._queue_manager.interrupt(queue_id, task_id)
-
-    # -------------------------------------------------------------------------
-    # Queue ID Resolution
-    # -------------------------------------------------------------------------
-
-    def _get_queue_id_for_chat(self, chat: ChatMetadata, interaction_id: str) -> str:
-        """
-        Determine the queue_id for a given chat and interaction.
-
-        Currently uses chat_id as the queue_id to ensure sequential processing
-        per chat. This can be customized in the future for more complex routing.
-
-        Args:
-            chat: The chat metadata
-            interaction_id: The interaction ID (unused, reserved for future routing)
-
-        Returns:
-            The queue ID to use for this chat
-        """
-        # interaction_id is unused but kept for future routing flexibility
-        _ = interaction_id
         return chat.chat_id
+
+    # -------------------------------------------------------------------------
+    # Lifecycle Management (delegated to BTM manager)
+    # -------------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Start the task manager."""
+        await self._btm_manager.start()
+
+    async def stop(self) -> None:
+        """Stop the task manager gracefully."""
+        await self._btm_manager.stop()
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True if the task manager is running."""
+        return self._btm_manager.is_running
+
+    async def __aenter__(self) -> "AgentTaskManager":
+        """Start the task manager when entering context."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Stop the task manager when exiting context."""
+        await self.stop()

@@ -11,10 +11,7 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
     GatewayDefaultFallbackConfig,
 )
 from assistant_gateway.chat_orchestrator.chat.store import ChatStore, InMemoryChatStore
-from assistant_gateway.chat_orchestrator.tasks_queue_manager import (
-    InMemoryTasksQueueManager,
-    TasksQueueManager,
-)
+from assistant_gateway.clauq_btm import QueueManager, InMemoryQueueManager
 
 
 @dataclass
@@ -52,14 +49,14 @@ class GatewayConfig:
 
     agent_configs: Mapping[str, AgentConfig]
     chat_store: ChatStore
-    queue_manager: TasksQueueManager
+    queue_manager: QueueManager
     default_fallback_config: Optional[GatewayDefaultFallbackConfig] = None
 
     def get_chat_store(self) -> ChatStore:
         return self.chat_store or InMemoryChatStore()
 
-    def get_queue_manager(self) -> TasksQueueManager:
-        return self.queue_manager or InMemoryTasksQueueManager()
+    def get_queue_manager(self) -> QueueManager:
+        return self.queue_manager or InMemoryQueueManager()
 
     def get_agent_configs(self) -> Dict[str, AgentConfig]:
         return dict(self.agent_configs)
