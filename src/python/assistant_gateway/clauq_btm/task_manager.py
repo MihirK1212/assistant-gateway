@@ -35,23 +35,22 @@ class BTMTaskManager:
     This manager provides:
     - Unified task creation for sync and background modes
     - Task lifecycle management (get, interrupt, wait)
-    - Sync task execution (inline)
-    - Background task execution (via queue manager)
+    - Sync task execution (inline, no queue required)
+    - Background task execution (via queue manager, queue_id required)
     - Internal executor registry management (hidden from external code)
 
     The executor registry is managed internally. When create_and_enqueue is called
     with both executor and executor_name, the executor is automatically registered.
     External code should not need to interact with the registry directly.
 
-    Usage (sync mode):
+    Usage (sync mode - no queue_id needed):
         task_manager = BTMTaskManager(queue_manager)
         async with task_manager:
             task, result = await task_manager.create_and_execute_sync(
-                queue_id="my_queue",
                 executor=my_executor,
             )
 
-    Usage (background mode):
+    Usage (background mode - queue_id required):
         task_manager = BTMTaskManager(queue_manager)
         async with task_manager:
             task = await task_manager.create_and_enqueue(
@@ -79,7 +78,7 @@ class BTMTaskManager:
         if hasattr(queue_manager, "set_executor_registry"):
             queue_manager.set_executor_registry(self._executor_registry)
 
-        # Maps task_id -> queue_id for all tasks (sync and background)
+        # Maps task_id -> queue_id for background tasks only (sync tasks don't have queue_id)
         self._task_queue_mapping: Dict[str, str] = {}
 
         # Maps task_id -> ClauqBTMTask for sync tasks (background tasks stored in queue manager)
@@ -91,7 +90,8 @@ class BTMTaskManager:
 
     def create_task(
         self,
-        queue_id: str,
+        is_background_task: bool,
+        queue_id: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ClauqBTMTask:
@@ -99,7 +99,8 @@ class BTMTaskManager:
         Create a new task with auto-generated ID.
 
         Args:
-            queue_id: The queue to assign the task to
+            is_background_task: Whether this is a background task (queued) or sync task
+            queue_id: The queue to assign the task to (required for background tasks, must be None for sync tasks)
             payload: Optional data payload for task execution
             metadata: Optional application-specific metadata
 
@@ -109,6 +110,7 @@ class BTMTaskManager:
         now = datetime.now(timezone.utc)
         return ClauqBTMTask(
             id=str(uuid4()),
+            is_background_task=is_background_task,
             queue_id=queue_id,
             status=TaskStatus.pending,
             created_at=now,
@@ -119,7 +121,6 @@ class BTMTaskManager:
 
     async def create_and_execute_sync(
         self,
-        queue_id: str,
         executor: TaskExecutor,
         post_execution: Optional[PostExecutionCallback] = None,
         payload: Optional[Dict[str, Any]] = None,
@@ -132,7 +133,6 @@ class BTMTaskManager:
         Handles the full lifecycle: create -> check interrupt -> run -> post-execute.
 
         Args:
-            queue_id: The queue ID (for tracking purposes)
             executor: The async function that executes the task
             post_execution: Optional callback after successful execution
             payload: Optional data payload for task execution
@@ -141,12 +141,16 @@ class BTMTaskManager:
         Returns:
             Tuple of (task, result) where result is None if interrupted
         """
-        # Create the task
-        task = self.create_task(queue_id, payload, metadata)
+        # Create the task (sync tasks don't have a queue_id)
+        task = self.create_task(
+            is_background_task=False,
+            queue_id=None,
+            payload=payload,
+            metadata=metadata,
+        )
 
-        # Register the task
+        # Register the task (sync tasks are tracked by task_id only, no queue_id)
         async with self._lock:
-            self._task_queue_mapping[task.id] = queue_id
             self._sync_tasks[task.id] = task
 
         # Check if already interrupted before starting
@@ -208,8 +212,13 @@ class BTMTaskManager:
         Returns:
             The created task (already enqueued)
         """
-        # Create the task
-        task = self.create_task(queue_id, payload, metadata)
+        # Create the task (background tasks require queue_id)
+        task = self.create_task(
+            is_background_task=True,
+            queue_id=queue_id,
+            payload=payload,
+            metadata=metadata,
+        )
 
         # Create wrapper that handles post-execution and interrupt checking
         async def wrapped_executor(t: ClauqBTMTask) -> Any:
@@ -234,8 +243,9 @@ class BTMTaskManager:
 
         # Register the wrapped executor internally (for distributed execution)
         self._executor_registry.add(executor_name, wrapped_executor)
-
+    
         # Also embed executor in task (for in-memory execution)
+        task.executor_name = executor_name
         task.executor = wrapped_executor
 
         # Track the mapping

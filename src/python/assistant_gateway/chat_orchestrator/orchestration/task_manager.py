@@ -142,7 +142,6 @@ class AgentTaskManager:
             return self._btm_to_agent_task(btm_task), None
         else:
             btm_task, result = await self._btm_manager.create_and_execute_sync(
-                queue_id=queue_id,
                 executor=btm_executor,
                 post_execution=btm_post_execution,
                 payload=executor_payload,

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TaskStatus(str, Enum):
@@ -27,7 +27,7 @@ class TaskStatus(str, Enum):
 
 class ClauqBTMTask(BaseModel):
     """
-    A background task for queue-based execution.
+    A task for queue-based or synchronous execution.
 
     This is a generic task model that is independent of any specific
     application domain. It does not contain application-specific fields
@@ -36,7 +36,8 @@ class ClauqBTMTask(BaseModel):
 
     Attributes:
         id: Unique task identifier
-        queue_id: The queue this task belongs to (for FIFO ordering)
+        is_background_task: Whether this is a background task (queued) or sync task
+        queue_id: The queue this task belongs to (required for background tasks, must be None for sync tasks)
         status: Current task status
         created_at: When the task was created
         updated_at: When the task was last updated
@@ -47,15 +48,37 @@ class ClauqBTMTask(BaseModel):
         executor_name: Name of registered executor (for distributed mode)
 
     Execution Modes:
-        1. In-memory: Set `executor` directly on the task
-        2. Distributed (Celery): Set `executor_name` to reference a registered executor
+        1. Sync: Set `is_background_task=False`, `queue_id=None` - executes inline
+        2. Background (In-memory): Set `is_background_task=True`, `queue_id` required, set `executor` directly
+        3. Background (Distributed/Celery): Set `is_background_task=True`, `queue_id` required, set `executor_name`
     """
 
     model_config = {"arbitrary_types_allowed": True}
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    queue_id: str = Field(description="The queue ID where this task is scheduled")
+    is_background_task: bool = Field(
+        default=False,
+        description="Whether this is a background task (queued) or sync task (inline execution)",
+    )
+    queue_id: Optional[str] = Field(
+        default=None,
+        description="The queue ID where this task is scheduled (required for background tasks, must be None for sync tasks)",
+    )
     status: TaskStatus = TaskStatus.pending
+
+    @model_validator(mode="after")
+    def validate_queue_id_based_on_task_type(self) -> "ClauqBTMTask":
+        """Validate that queue_id is set correctly based on task type."""
+        if self.is_background_task and self.queue_id is None:
+            raise ValueError(
+                "queue_id is required for background tasks (is_background_task=True)"
+            )
+        if not self.is_background_task and self.queue_id is not None:
+            raise ValueError(
+                "queue_id must be None for sync tasks (is_background_task=False)"
+            )
+        return self
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: Dict[str, Any] = Field(

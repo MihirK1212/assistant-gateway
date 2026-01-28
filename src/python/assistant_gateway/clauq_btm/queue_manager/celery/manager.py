@@ -1,48 +1,5 @@
 """
-Celery-based Queue Manager.
-
-This implementation uses Celery for distributed task execution and Redis for:
-- Task state persistence
-- FIFO queue management per queue_id
-- Real-time event pub/sub for subscribers
-
-Architecture:
-    ┌─────────────────┐      ┌─────────────────┐
-    │  Application    │      │  Celery Worker  │
-    │  (enqueue)      │─────▶│  (execute)      │
-    └────────┬────────┘      └────────┬────────┘
-             │                        │
-             ▼                        ▼
-    ┌─────────────────────────────────────────┐
-    │              Redis                       │
-    │  - Task State (Hash)                    │
-    │  - Queue (Sorted Set for FIFO)          │
-    │  - Events (Pub/Sub)                     │
-    └─────────────────────────────────────────┘
-
-Usage:
-    from celery import Celery
-
-    app = Celery('tasks', broker='redis://localhost:6379/0')
-
-    queue_manager = CeleryQueueManager(
-        celery_app=app,
-        redis_url='redis://localhost:6379/0',
-    )
-
-    async with queue_manager:
-        await queue_manager.enqueue(task, executor_name="my_executor")
-
-Worker Setup:
-    # In your worker module, register executors:
-    from assistant_gateway.clauq_btm import default_executor_registry
-
-    @default_executor_registry.register("my_executor")
-    async def my_executor(task: ClauqBTMTask) -> Any:
-        ...
-
-    # Then run celery worker:
-    # celery -A your_module worker -l info
+Celery-based distributed queue manager implementation.
 """
 
 from __future__ import annotations
@@ -70,323 +27,32 @@ from assistant_gateway.clauq_btm.queue_manager.base import (
     QueueInfo,
     QueueManager,
 )
+from assistant_gateway.clauq_btm.queue_manager.celery.constants import (
+    TASK_KEY_PREFIX,
+    QUEUE_KEY_PREFIX,
+    QUEUE_META_PREFIX,
+    CELERY_TASK_PREFIX,
+    EVENTS_CHANNEL_PREFIX,
+    ALL_EVENTS_CHANNEL,
+    COMPLETED_TASK_TTL,
+)
+from assistant_gateway.clauq_btm.queue_manager.celery.serialization import (
+    serialize_task,
+    serialize_event,
+)
+from assistant_gateway.clauq_btm.queue_manager.celery.subscription import (
+    RedisEventSubscription,
+)
+from assistant_gateway.clauq_btm.queue_manager.celery.celery_task import (
+    create_celery_task,
+)
 
 if TYPE_CHECKING:
     from celery import Celery
     from redis.asyncio import Redis
-    from redis.asyncio.client import PubSub
 
 
 logger = logging.getLogger(__name__)
-
-
-# -----------------------------------------------------------------------------
-# Constants
-# -----------------------------------------------------------------------------
-
-# Redis key prefixes
-TASK_KEY_PREFIX = "clauq:task:"  # Hash storing task data
-QUEUE_KEY_PREFIX = "clauq:queue:"  # Sorted set for FIFO ordering
-QUEUE_META_PREFIX = "clauq:queue_meta:"  # Hash for queue metadata
-CELERY_TASK_PREFIX = "clauq:celery_task:"  # Maps task_id -> celery_task_id
-EVENTS_CHANNEL_PREFIX = "clauq:events:"  # Pub/sub channel for events
-ALL_EVENTS_CHANNEL = "clauq:events:*"  # Pattern for all events
-
-# Task state TTL (7 days) - completed tasks are kept for reference
-COMPLETED_TASK_TTL = 7 * 24 * 60 * 60
-
-
-# -----------------------------------------------------------------------------
-# Redis Event Subscription
-# -----------------------------------------------------------------------------
-
-
-class RedisEventSubscription(EventSubscription):
-    """Event subscription backed by Redis pub/sub."""
-
-    def __init__(
-        self,
-        redis: "Redis",
-        channel: str,
-        pattern: bool = False,
-    ) -> None:
-        self._redis = redis
-        self._channel = channel
-        self._pattern = pattern
-        self._pubsub: Any = None
-        self._closed = False
-
-    async def _ensure_subscribed(self) -> None:
-        """Ensure we're subscribed to the channel."""
-        if self._pubsub is None:
-            self._pubsub: PubSub = self._redis.pubsub()
-            if self._pattern:
-                await self._pubsub.psubscribe(self._channel)
-            else:
-                await self._pubsub.subscribe(self._channel)
-
-    def __aiter__(self) -> AsyncIterator[TaskEvent]:
-        return self
-
-    async def __anext__(self) -> TaskEvent:
-        """Get the next event from the subscription."""
-        if self._closed:
-            raise StopAsyncIteration
-
-        await self._ensure_subscribed()
-
-        while not self._closed:
-            try:
-                message = await self._pubsub.get_message(
-                    ignore_subscribe_messages=True,
-                    timeout=1.0,
-                )
-                if message is None:
-                    continue
-
-                if message["type"] in ("message", "pmessage"):
-                    data = json.loads(message["data"])
-                    return _deserialize_event(data)
-
-            except asyncio.CancelledError:
-                raise StopAsyncIteration
-            except Exception as e:
-                logger.warning(f"Error reading from pubsub: {e}")
-                await asyncio.sleep(0.1)
-
-        raise StopAsyncIteration
-
-    async def close(self) -> None:
-        """Close the subscription."""
-        self._closed = True
-        if self._pubsub is not None:
-            try:
-                if self._pattern:
-                    await self._pubsub.punsubscribe(self._channel)
-                else:
-                    await self._pubsub.unsubscribe(self._channel)
-                await self._pubsub.close()
-            except Exception as e:
-                logger.warning(f"Error closing pubsub: {e}")
-            finally:
-                self._pubsub = None
-
-
-# -----------------------------------------------------------------------------
-# Serialization Helpers
-# -----------------------------------------------------------------------------
-
-
-def _serialize_task(task: ClauqBTMTask) -> Dict[str, Any]:
-    """Serialize a task for Redis storage."""
-    return task.model_dump(mode="json", exclude={"executor"})
-
-
-def _deserialize_task(data: Dict[str, Any]) -> ClauqBTMTask:
-    """Deserialize a task from Redis storage."""
-    return ClauqBTMTask.model_validate(data)
-
-
-def _serialize_event(event: TaskEvent) -> Dict[str, Any]:
-    """Serialize an event for pub/sub."""
-    return {
-        "event_type": event.event_type.value,
-        "task_id": event.task_id,
-        "queue_id": event.queue_id,
-        "status": event.status.value,
-        "timestamp": event.timestamp.isoformat(),
-        "error": event.error,
-        "progress": event.progress,
-        "task": _serialize_task(event.task) if event.task else None,
-    }
-
-
-def _deserialize_event(data: Dict[str, Any]) -> TaskEvent:
-    """Deserialize an event from pub/sub."""
-    return TaskEvent(
-        event_type=TaskEventType(data["event_type"]),
-        task_id=data["task_id"],
-        queue_id=data["queue_id"],
-        status=TaskStatus(data["status"]),
-        timestamp=datetime.fromisoformat(data["timestamp"]),
-        error=data.get("error"),
-        progress=data.get("progress"),
-        task=_deserialize_task(data["task"]) if data.get("task") else None,
-    )
-
-
-# -----------------------------------------------------------------------------
-# Celery Task Definition
-# -----------------------------------------------------------------------------
-
-
-def create_celery_task(
-    celery_app: "Celery",
-    executor_registry: ExecutorRegistry,
-) -> Any:
-    """
-    Create the Celery task that executes ClauqBTMTask.
-
-    This should be called once when setting up your Celery app.
-    The task will look up executors from the executor_registry.
-    """
-
-    @celery_app.task(
-        bind=True,
-        name="clauq.execute_task",
-        acks_late=True,
-        reject_on_worker_lost=True,
-        max_retries=0,  # No automatic retries - let the caller handle it
-    )
-    def execute_task(
-        self: Any,
-        task_data: Dict[str, Any],
-        executor_name: str,
-        redis_url: str,
-    ) -> Dict[str, Any]:
-        """
-        Celery task that executes a ClauqBTMTask.
-
-        This task:
-        1. Deserializes the task
-        2. Looks up the executor by name
-        3. Runs the executor (handles async)
-        4. Updates task state in Redis
-        5. Publishes completion event
-        """
-        import asyncio
-        import redis
-
-        # Connect to Redis (sync client for Celery)
-        redis_client = redis.from_url(redis_url)
-
-        task_id = task_data["id"]
-        queue_id = task_data["queue_id"]
-        task_key = f"{TASK_KEY_PREFIX}{task_id}"
-        events_channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
-
-        def _update_task_state(
-            status: TaskStatus,
-            result: Optional[Dict[str, Any]] = None,
-            error: Optional[str] = None,
-        ) -> None:
-            """Update task state in Redis."""
-            now = datetime.now(timezone.utc).isoformat()
-            updates = {
-                "status": status.value,
-                "updated_at": now,
-            }
-            if result is not None:
-                updates["result"] = json.dumps(result)
-            if error is not None:
-                updates["error"] = error
-
-            redis_client.hset(task_key, mapping=updates)
-
-            # Set TTL for completed tasks
-            if status in (
-                TaskStatus.completed,
-                TaskStatus.failed,
-                TaskStatus.interrupted,
-            ):
-                redis_client.expire(task_key, COMPLETED_TASK_TTL)
-
-        def _publish_event(
-            event_type: TaskEventType, error: Optional[str] = None
-        ) -> None:
-            """Publish event to Redis pub/sub."""
-            # Get current task state
-            task_data_raw = redis_client.hgetall(task_key)
-            task_data_decoded = {
-                k.decode() if isinstance(k, bytes) else k: (
-                    v.decode() if isinstance(v, bytes) else v
-                )
-                for k, v in task_data_raw.items()
-            }
-
-            # Handle result field if it's JSON
-            if "result" in task_data_decoded and task_data_decoded["result"]:
-                try:
-                    task_data_decoded["result"] = json.loads(
-                        task_data_decoded["result"]
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            event = {
-                "event_type": event_type.value,
-                "task_id": task_id,
-                "queue_id": queue_id,
-                "status": task_data_decoded.get("status", TaskStatus.pending.value),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "error": error,
-                "progress": None,
-                "task": task_data_decoded if task_data_decoded else None,
-            }
-            redis_client.publish(events_channel, json.dumps(event))
-
-        try:
-            # Mark as in progress
-            _update_task_state(TaskStatus.in_progress)
-            _publish_event(TaskEventType.STARTED)
-
-            # Get executor
-            executor = executor_registry.get(executor_name)
-            if executor is None:
-                raise RuntimeError(f"Executor '{executor_name}' not found in registry")
-
-            # Deserialize task
-            task = _deserialize_task(task_data)
-
-            # Run the async executor
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(executor(task))
-            finally:
-                loop.close()
-
-            # Serialize result
-            result_data = None
-            if result is not None:
-                if hasattr(result, "model_dump"):
-                    result_data = result.model_dump(mode="json")
-                elif hasattr(result, "dict"):
-                    result_data = result.dict()
-                else:
-                    result_data = result
-
-            # Mark as completed
-            _update_task_state(TaskStatus.completed, result=result_data)
-            _publish_event(TaskEventType.COMPLETED)
-
-            return {"status": "completed", "result": result_data}
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.exception(f"Task {task_id} failed: {error_msg}")
-
-            # Check if this was a revocation (interrupt)
-            if "TaskRevokedError" in type(e).__name__ or self.request.called_directly:
-                _update_task_state(TaskStatus.interrupted, error="Task was interrupted")
-                _publish_event(TaskEventType.INTERRUPTED, error="Task was interrupted")
-                return {"status": "interrupted"}
-
-            # Mark as failed
-            _update_task_state(TaskStatus.failed, error=error_msg)
-            _publish_event(TaskEventType.FAILED, error=error_msg)
-
-            return {"status": "failed", "error": error_msg}
-
-        finally:
-            redis_client.close()
-
-    return execute_task
-
-
-# -----------------------------------------------------------------------------
-# CeleryQueueManager
-# -----------------------------------------------------------------------------
 
 
 class CeleryQueueManager(QueueManager):
@@ -523,6 +189,8 @@ class CeleryQueueManager(QueueManager):
         if self._redis is not None:
             await self._redis.close()
             self._redis = None
+
+        self._celery_task = None
 
         logger.info("CeleryQueueManager stopped")
 
@@ -675,7 +343,7 @@ class CeleryQueueManager(QueueManager):
         events_channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
 
         # Serialize task
-        task_data = _serialize_task(task)
+        task_data = serialize_task(task)
         task_data["executor_name"] = executor_name
 
         async with self._lock:
@@ -716,7 +384,7 @@ class CeleryQueueManager(QueueManager):
             # Publish queued event
             event = TaskEvent.from_task(TaskEventType.QUEUED, task)
             await self._redis.publish(
-                events_channel, json.dumps(_serialize_event(event))
+                events_channel, json.dumps(serialize_event(event))
             )
 
         logger.debug(f"Task {task.id} enqueued to {queue_id}")
@@ -745,7 +413,7 @@ class CeleryQueueManager(QueueManager):
             else:
                 parsed_data[k] = v
 
-        return _deserialize_task(parsed_data)
+        return ClauqBTMTask.model_validate(parsed_data)
 
     async def update(self, queue_id: str, task: ClauqBTMTask) -> None:
         """Update a task in the queue."""
@@ -768,7 +436,7 @@ class CeleryQueueManager(QueueManager):
             )
 
         # Update task data
-        task_data = _serialize_task(task)
+        task_data = serialize_task(task)
         await self._redis.hset(
             task_key,
             mapping={
@@ -885,7 +553,7 @@ class CeleryQueueManager(QueueManager):
         if task:
             event = TaskEvent.from_task(TaskEventType.INTERRUPTED, task)
             await self._redis.publish(
-                events_channel, json.dumps(_serialize_event(event))
+                events_channel, json.dumps(serialize_event(event))
             )
 
         return task
@@ -995,68 +663,3 @@ class CeleryQueueManager(QueueManager):
             yield subscription
         finally:
             await subscription.close()
-
-
-# -----------------------------------------------------------------------------
-# Utility Functions
-# -----------------------------------------------------------------------------
-
-
-def create_celery_app(
-    name: str = "clauq",
-    broker_url: str = "redis://localhost:6379/0",
-    result_backend: str = "redis://localhost:6379/0",
-    **kwargs: Any,
-) -> "Celery":
-    """
-    Create a pre-configured Celery app for the queue manager.
-
-    Args:
-        name: Name of the Celery app
-        broker_url: Message broker URL (Redis recommended)
-        result_backend: Result backend URL
-        **kwargs: Additional Celery configuration
-
-    Returns:
-        Configured Celery app
-
-    Example:
-        app = create_celery_app()
-
-        @default_executor_registry.register("my_task")
-        async def my_task(task: ClauqBTMTask) -> Any:
-            return {"result": task.payload}
-
-        # In a separate terminal:
-        # celery -A your_module:app worker -l info -Q clauq_queue_id
-    """
-    from celery import Celery
-
-    app = Celery(
-        name,
-        broker=broker_url,
-        backend=result_backend,
-    )
-
-    # Configure for task queue manager
-    app.conf.update(
-        # Task settings
-        task_serializer="json",
-        accept_content=["json"],
-        result_serializer="json",
-        timezone="UTC",
-        enable_utc=True,
-        # Worker settings
-        worker_prefetch_multiplier=1,  # One task at a time for FIFO
-        task_acks_late=True,
-        task_reject_on_worker_lost=True,
-        # Result settings
-        result_expires=COMPLETED_TASK_TTL,
-        # Apply any additional configuration
-        **kwargs,
-    )
-
-    # Register the execute_task
-    create_celery_task(app, default_executor_registry)
-
-    return app
