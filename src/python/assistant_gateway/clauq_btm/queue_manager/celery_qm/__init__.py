@@ -45,19 +45,19 @@ Worker Setup:
     # celery -A your_module worker -l info
 """
 
-from assistant_gateway.clauq_btm.queue_manager.celery.manager import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.manager import (
     CeleryQueueManager,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery.celery_task import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.celery_task import (
     create_celery_task,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery.subscription import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.subscription import (
     RedisEventSubscription,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery.utils import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.utils import (
     create_celery_app,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery.constants import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.constants import (
     TASK_KEY_PREFIX,
     QUEUE_KEY_PREFIX,
     QUEUE_META_PREFIX,

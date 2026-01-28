@@ -4,11 +4,31 @@ Serialization helpers for tasks and events in the Celery queue manager.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Dict
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
+
+
+def serialize_for_redis_hset(data: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Serialize a dictionary for Redis HSET operation.
+
+    Converts all values to strings:
+    - dict/list values are JSON-encoded
+    - None values become empty strings
+    - Other values are converted to str
+    """
+    return {
+        k: (
+            json.dumps(v)
+            if isinstance(v, (dict, list))
+            else str(v) if v is not None else ""
+        )
+        for k, v in data.items()
+    }
 
 
 def serialize_task(task: ClauqBTMTask) -> Dict[str, Any]:

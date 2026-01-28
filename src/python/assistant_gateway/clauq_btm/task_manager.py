@@ -4,9 +4,10 @@ Task Manager for the Clau-Queue Background Task Manager.
 Provides a unified interface for both synchronous and background task execution.
 Handles task lifecycle management, interrupt handling, and queue coordination.
 
-The executor registry is internal to this module - external code should not
-interact with it directly. Executors are registered automatically when
-create_and_enqueue is called with both executor and executor_name.
+For distributed Celery execution, the executor registry defaults to
+default_executor_registry so that both the app and Celery workers share the
+same registry. Executors are registered automatically when create_and_enqueue
+is called with both executor and executor_name.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from uuid import uuid4
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
-from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
+from assistant_gateway.clauq_btm.executor_registry import default_executor_registry
 from assistant_gateway.clauq_btm.queue_manager.base import QueueManager
 
 
@@ -37,11 +38,12 @@ class BTMTaskManager:
     - Task lifecycle management (get, interrupt, wait)
     - Sync task execution (inline, no queue required)
     - Background task execution (via queue manager, queue_id required)
-    - Internal executor registry management (hidden from external code)
+    - Executor registry management with distributed Celery support
 
-    The executor registry is managed internally. When create_and_enqueue is called
-    with both executor and executor_name, the executor is automatically registered.
-    External code should not need to interact with the registry directly.
+    For distributed Celery execution, uses default_executor_registry internally
+    so that both the app and Celery workers share the same registry instance.
+    When create_and_enqueue is called with both executor and executor_name,
+    the executor is automatically registered.
 
     Usage (sync mode - no queue_id needed):
         task_manager = BTMTaskManager(queue_manager)
@@ -71,8 +73,8 @@ class BTMTaskManager:
         self._queue_manager = queue_manager
         self._lock = asyncio.Lock()
 
-        # Internal executor registry - managed by this class
-        self._executor_registry = ExecutorRegistry()
+        # Use global registry for Celery worker compatibility
+        self._executor_registry = default_executor_registry
 
         # Share registry with queue manager (for Celery distributed execution)
         if hasattr(queue_manager, "set_executor_registry"):
@@ -243,6 +245,7 @@ class BTMTaskManager:
 
         # Register the wrapped executor internally (for distributed execution)
         self._executor_registry.add(executor_name, wrapped_executor)
+        self._queue_manager.set_executor_registry(self._executor_registry)
     
         # Also embed executor in task (for in-memory execution)
         task.executor_name = executor_name

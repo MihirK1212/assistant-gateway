@@ -12,12 +12,12 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from assistant_gateway.clauq_btm.schemas import TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEventType
 from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
-from assistant_gateway.clauq_btm.queue_manager.celery.constants import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.constants import (
     TASK_KEY_PREFIX,
     EVENTS_CHANNEL_PREFIX,
     COMPLETED_TASK_TTL,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery.serialization import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.serialization import (
     deserialize_task,
 )
 

@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, TYPE_CHECKING
 
 from assistant_gateway.clauq_btm.events import TaskEvent
 from assistant_gateway.clauq_btm.queue_manager.base import EventSubscription
-from assistant_gateway.clauq_btm.queue_manager.celery.serialization import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.serialization import (
     deserialize_event,
 )
 

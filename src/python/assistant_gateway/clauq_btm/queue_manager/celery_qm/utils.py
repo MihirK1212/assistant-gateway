@@ -1,5 +1,12 @@
 """
 Utility functions for setting up Celery with the queue manager.
+
+This module provides create_celery_app() which creates a Celery app with
+the clauq.execute_task already registered. This is important because Celery
+workers need to see the task at import time.
+
+Both this module and CeleryQueueManager use default_executor_registry,
+ensuring that executors registered by BTMTaskManager are visible to workers.
 """
 
 from __future__ import annotations
@@ -7,10 +14,10 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 
 from assistant_gateway.clauq_btm.executor_registry import default_executor_registry
-from assistant_gateway.clauq_btm.queue_manager.celery.constants import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.constants import (
     COMPLETED_TASK_TTL,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery.celery_task import (
+from assistant_gateway.clauq_btm.queue_manager.celery_qm.celery_task import (
     create_celery_task,
 )
 
@@ -27,6 +34,10 @@ def create_celery_app(
     """
     Create a pre-configured Celery app for the queue manager.
 
+    This registers the clauq.execute_task with default_executor_registry,
+    which is shared with BTMTaskManager and CeleryQueueManager. This ensures
+    executors registered at runtime are visible to Celery workers.
+
     Args:
         name: Name of the Celery app
         broker_url: Message broker URL (Redis recommended)
@@ -37,14 +48,19 @@ def create_celery_app(
         Configured Celery app
 
     Example:
+        # In your worker module (e.g., tasks.py):
         app = create_celery_app()
 
+        # Executors can be registered via decorator (at module load time)
         @default_executor_registry.register("my_task")
         async def my_task(task: ClauqBTMTask) -> Any:
             return {"result": task.payload}
 
-        # In a separate terminal:
-        # celery -A your_module:app worker -l info -Q clauq_queue_id
+        # Or registered dynamically via BTMTaskManager.create_and_enqueue()
+        # Both use default_executor_registry, so workers will find them.
+
+        # Start worker:
+        # celery -A tasks:app worker -l info -Q clauq_queue_id
     """
     from celery import Celery
 
