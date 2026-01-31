@@ -11,7 +11,7 @@ API process (uvicorn). This is expected and correct for Celery's distributed
 task processing model.
 
 How it works:
-    
+
     ┌─────────────────────────────┐     ┌─────────────────────────────┐
     │   API Process (uvicorn)     │     │  Worker Process (celery)    │
     ├─────────────────────────────┤     ├─────────────────────────────┤
@@ -36,13 +36,13 @@ Why this works:
     1. Redis is the shared state - Both instances connect to the same Redis
        broker/backend, so tasks enqueued by API are visible to workers and
        task status updates are stored in Redis (not in-memory).
-    
+
     2. Same executor registration - Both call build_gateway_config() which
        ensures identical executors are registered in both processes.
-    
+
     3. Same Celery task name - The task "clauq.execute_task" is registered
        identically in both apps.
-    
+
     4. This is how Celery is designed - Celery expects separate app instances
        in separate processes communicating via a message broker.
 
@@ -61,6 +61,7 @@ Usage:
 
 import sys
 import os
+import asyncio
 
 from assistant_gateway.chat_orchestrator.orchestration.orchestrator import (
     ConversationOrchestrator,
@@ -81,7 +82,8 @@ config = build_gateway_config()
 
 # Creating the orchestrator triggers AgentTaskManager.__init__
 # which calls clauq_btm.setup() to register executors
-orchestrator = ConversationOrchestrator(config)
+orchestrator = ConversationOrchestrator(config=config)
+asyncio.run(orchestrator.start())
 
 # Now we can export the celery app - it has the task registered
 celery_app = config.clauq_btm.celery_app
