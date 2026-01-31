@@ -168,12 +168,8 @@ def create_celery_task(
                 return {"status": "interrupted"}
 
             # Mark as in progress
-            _update_task_state(TaskStatus.in_progress_celery)
+            _update_task_state(TaskStatus.in_progress)
             _publish_event(TaskEventType.STARTED)
-
-            print(
-                "[BGDEBUG] celery_task in_progress_celery task status updated to in_progress_celery"
-            )
 
             # Get executor config from registry
             executor_config = executor_registry.get_config(executor_name)
@@ -190,14 +186,7 @@ def create_celery_task(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                print(
-                    "[BGDEBUG] celery_task about to run the executor:",
-                    executor_config.executor,
-                )
-
                 result = loop.run_until_complete(executor_config.executor(task))
-
-                print("[BGDEBUG] celery_task executor result:", result)
 
                 # Check if interrupted during execution
                 current_status = _get_task_status()
@@ -227,8 +216,6 @@ def create_celery_task(
                 else:
                     result_data = result
 
-            print("[BGDEBUG] celery_task result_data:", result_data)
-
             # Mark as completed
             _update_task_state(TaskStatus.completed, result=result_data)
             _publish_event(TaskEventType.COMPLETED)
@@ -238,8 +225,6 @@ def create_celery_task(
         except Exception as e:
             error_msg = str(e)
             logger.exception(f"Task {task_id} failed: {error_msg}")
-
-            print("[BGDEBUG] celery_task exception:", e)
 
             # Check if this was a revocation (interrupt)
             if "TaskRevokedError" in type(e).__name__ or self.request.called_directly:

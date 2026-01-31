@@ -384,16 +384,9 @@ class CeleryQueueManager:
         task_data = serialize_task(task)
         task_data["executor_name"] = executor_name
 
-        print('[BGDEBUG] enqueue called with task_data:', task_data, 'redis is working fine. about to create queue and store task data and call apply_async with celery_task.')
-
         await self.create_queue(queue_id)
         
         async with self._lock:
-            print('[BGDEBUG] obtained lock. about to create queue:', queue_id)
-
-
-            print('[BGDEBUG] queue created. about to store task data:', task_key)
-
             # Store task data
             await self._redis.hset(
                 task_key,
@@ -404,7 +397,6 @@ class CeleryQueueManager:
             score = time.time()
             await self._redis.zadd(queue_key, {task.id: score})
 
-            print('[BGDEBUG] about to apply_async with celery_task:', self._celery_task)
             
             # Send to Celery
             if self._celery_task is not None:
@@ -413,11 +405,8 @@ class CeleryQueueManager:
                 # Use a unique queue per queue_id for ordering
                 celery_result = self._celery_task.apply_async(
                     args=[task_data, executor_name, self._redis_url],
-                    # queue=f"clauq_{queue_id}",
                     task_id=f"clauq_{task.id}",
                 )
-
-                print('[BGDEBUG] celery_result:', celery_result)
 
                 # Store Celery task ID mapping
                 await self._redis.set(celery_task_key, celery_result.id)
@@ -453,8 +442,6 @@ class CeleryQueueManager:
                 parsed_data[k] = None
             else:
                 parsed_data[k] = v
-
-        print('[BGDEBUG] get called with parsed_data:', parsed_data)
 
         return deserialize_task(parsed_data)
 
@@ -695,3 +682,4 @@ class CeleryQueueManager:
             yield subscription
         finally:
             await subscription.close()
+            

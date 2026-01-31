@@ -182,8 +182,6 @@ class AgentTaskManager:
             METADATA_IS_BACKGROUND: run_in_background,
         }
 
-        print('[BGDEBUG] create_and_execute_task called queue_id:', queue_id, 'interaction_id:', interaction_id, 'run_in_background:', run_in_background)
-
         if run_in_background:
             # Background mode: use registered executor by name
             btm_task = await self._btm_manager.create_and_enqueue(
