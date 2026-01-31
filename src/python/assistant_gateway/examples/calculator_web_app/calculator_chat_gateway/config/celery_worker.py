@@ -74,4 +74,4 @@ from assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.confi
 config = build_gateway_config()
 
 # Export the celery app for the worker
-celery_app = config.clauq_btm.celery_app
+celery_app = config.clauq_btm._create_celery_app()

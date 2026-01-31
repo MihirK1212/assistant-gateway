@@ -455,57 +455,6 @@ class ClauqBTM:
         # Step 2-5: Finalize setup and return task manager
         return self.finalize_setup()
 
-    def register_executor(
-        self,
-        name: str,
-        executor: ExecutorFunc,
-        post_execution: Optional[PostExecutionFunc] = None,
-    ) -> None:
-        """
-        Register a single executor function.
-
-        This is an alternative to using the decorator pattern. Call this
-        before finalize_setup().
-
-        Args:
-            name: Unique name for the executor.
-            executor: The async executor function.
-            post_execution: Optional post-execution callback.
-
-        Raises:
-            ClauqBTMSetupError: If setup is already complete.
-            ValueError: If executor with same name already registered.
-
-        Example:
-            clauq_btm = ClauqBTM(redis_url='...')
-
-            clauq_btm.register_executor(
-                name='my_task',
-                executor=my_executor_fn,
-                post_execution=my_callback,
-            )
-
-            task_manager = clauq_btm.finalize_setup()
-        """
-        self._ensure_not_setup_complete("register_executor")
-
-        if name in self._registered_executor_names:
-            raise ValueError(
-                f"Executor '{name}' is already registered. "
-                "Each executor name must be unique."
-            )
-
-        # Register in the executor registry
-        self.executor_registry.add(
-            name,
-            ExecutorConfig(executor=executor, post_execution=post_execution),
-        )
-        self._registered_executor_names.append(name)
-
-        # Update state if this is the first executor
-        if self._setup_state == SetupState.NOT_STARTED:
-            self._setup_state = SetupState.EXECUTORS_REGISTERED
-
     def finalize_setup(self) -> BTMTaskManager:
         """
         Finalize the setup after executors have been registered.
@@ -582,6 +531,57 @@ class ClauqBTM:
         self._setup_state = SetupState.SETUP_COMPLETE
 
         return self._task_manager
+
+    def register_executor(
+        self,
+        name: str,
+        executor: ExecutorFunc,
+        post_execution: Optional[PostExecutionFunc] = None,
+    ) -> None:
+        """
+        Register a single executor function.
+
+        This is an alternative to using the decorator pattern. Call this
+        before finalize_setup().
+
+        Args:
+            name: Unique name for the executor.
+            executor: The async executor function.
+            post_execution: Optional post-execution callback.
+
+        Raises:
+            ClauqBTMSetupError: If setup is already complete.
+            ValueError: If executor with same name already registered.
+
+        Example:
+            clauq_btm = ClauqBTM(redis_url='...')
+
+            clauq_btm.register_executor(
+                name='my_task',
+                executor=my_executor_fn,
+                post_execution=my_callback,
+            )
+
+            task_manager = clauq_btm.finalize_setup()
+        """
+        self._ensure_not_setup_complete("register_executor")
+
+        if name in self._registered_executor_names:
+            raise ValueError(
+                f"Executor '{name}' is already registered. "
+                "Each executor name must be unique."
+            )
+
+        # Register in the executor registry
+        self.executor_registry.add(
+            name,
+            ExecutorConfig(executor=executor, post_execution=post_execution),
+        )
+        self._registered_executor_names.append(name)
+
+        # Update state if this is the first executor
+        if self._setup_state == SetupState.NOT_STARTED:
+            self._setup_state = SetupState.EXECUTORS_REGISTERED
 
     def _register_executors(self, executors: Dict[str, ExecutorMapping]) -> None:
         """
@@ -706,7 +706,7 @@ class ClauqBTM:
     # -------------------------------------------------------------------------
 
     def _create_celery_app(self) -> "Celery":
-        """Create and configure the Celery application."""
+        """Create and configure the Celery application, without any external dependencies or state validation."""
         try:
             from celery import Celery
         except ImportError:
