@@ -682,8 +682,4 @@ class CeleryQueueManager:
             yield subscription
         finally:
             await subscription.close()
-
-'''
-chat1: adbd6615-2c6e-4783-8e03-e4aea6dedded
-chat2: 9a1db2f9-5b5e-47d8-8265-eba93e68f649
-'''
+            
