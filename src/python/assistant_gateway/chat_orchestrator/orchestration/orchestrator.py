@@ -164,6 +164,8 @@ class ConversationOrchestrator:
             HTTPException 409: If another send_message operation is already in progress on this chat
         """
 
+        print('[BGDEBUG] send_message called with run_in_background:', chat_id, content, run_in_background)
+
         # Acquire lock to prevent concurrent operations on the same chat
         async with self._acquire_chat_lock(chat_id):
             # Step 1: Get the chat

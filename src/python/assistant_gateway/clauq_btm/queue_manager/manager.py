@@ -399,6 +399,8 @@ class CeleryQueueManager:
 
             # Send to Celery
             if self._celery_task is not None:
+                print('[BGDEBUG] about to apply_async with celery_task:', self._celery_task)
+
                 # Apply async to Celery
                 # Use a unique queue per queue_id for ordering
                 celery_result = self._celery_task.apply_async(

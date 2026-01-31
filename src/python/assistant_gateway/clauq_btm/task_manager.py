@@ -234,6 +234,8 @@ class BTMTaskManager:
             payload=payload,
             metadata=metadata,
         )
+        
+        print('clauq_btm task_manager create_and_enqueue task created:', task)
 
         # Track the mapping
         async with self._lock:
