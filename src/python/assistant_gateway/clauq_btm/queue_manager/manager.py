@@ -387,7 +387,11 @@ class CeleryQueueManager:
         print('[BGDEBUG] enqueue called with task_data:', task_data, 'redis is working fine. about to create queue and store task data and call apply_async with celery_task.')
 
         async with self._lock:
+            print('[BGDEBUG] obtained lock. about to create queue:', queue_id)
+
             await self.create_queue(queue_id)
+
+            print('[BGDEBUG] queue created. about to store task data:', task_key)
 
             # Store task data
             await self._redis.hset(
