@@ -38,7 +38,7 @@ def mihir_custom_log(message: str) -> dict:
     from datetime import datetime, timezone, timedelta
 
     received_timestamp = datetime.now(
-        timezone.utc + timedelta(hours=5, minutes=30)
+        timezone(timedelta(hours=5, minutes=30))
     ).strftime("%Y-%m-%d %H:%M:%S")
 
     # Sleep for a random time between 60 and 80 seconds
@@ -48,9 +48,9 @@ def mihir_custom_log(message: str) -> dict:
     log_file = os.path.join(os.path.dirname(__file__), "logs.txt")
 
     printed_timestamp = datetime.now(
-        timezone.utc + timedelta(hours=5, minutes=30)
+        timezone(timedelta(hours=5, minutes=30))
     ).strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[[Received at: ({received_timestamp})] [Printed at: ({printed_timestamp})] [Waited for: {sleep_time} seconds] {{{message}}}\n"
+    log_entry = f"[Received at: ({received_timestamp})] [Printed at: ({printed_timestamp})] [Waited for: {sleep_time} seconds] {{{message}}}\n"
 
     with open(log_file, "a") as f:
         f.write(log_entry)
