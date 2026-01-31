@@ -23,6 +23,7 @@ class TaskStatus(str, Enum):
     completed = "completed"
     failed = "failed"
     interrupted = "interrupted"
+    in_progress_celery = "in_progress_celery"
 
 
 class ClauqBTMTask(BaseModel):

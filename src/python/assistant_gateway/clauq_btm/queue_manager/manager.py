@@ -413,9 +413,11 @@ class CeleryQueueManager:
                 # Use a unique queue per queue_id for ordering
                 celery_result = self._celery_task.apply_async(
                     args=[task_data, executor_name, self._redis_url],
-                    queue=f"clauq_{queue_id}",
+                    # queue=f"clauq_{queue_id}",
                     task_id=f"clauq_{task.id}",
                 )
+
+                print('[BGDEBUG] celery_result:', celery_result)
 
                 # Store Celery task ID mapping
                 await self._redis.set(celery_task_key, celery_result.id)
