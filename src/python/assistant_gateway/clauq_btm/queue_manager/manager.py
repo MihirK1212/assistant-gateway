@@ -384,6 +384,8 @@ class CeleryQueueManager:
         task_data = serialize_task(task)
         task_data["executor_name"] = executor_name
 
+        print('[BGDEBUG] enqueue called with task_data:', task_data, 'redis is working fine. about to create queue and store task data and call apply_async with celery_task.')
+
         async with self._lock:
             await self.create_queue(queue_id)
 
@@ -397,9 +399,10 @@ class CeleryQueueManager:
             score = time.time()
             await self._redis.zadd(queue_key, {task.id: score})
 
+            print('[BGDEBUG] about to apply_async with celery_task:', self._celery_task)
+            
             # Send to Celery
             if self._celery_task is not None:
-                print('[BGDEBUG] about to apply_async with celery_task:', self._celery_task)
 
                 # Apply async to Celery
                 # Use a unique queue per queue_id for ordering
