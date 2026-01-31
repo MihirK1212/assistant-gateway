@@ -62,16 +62,26 @@ Usage:
 import sys
 import os
 
-
-# Add the package to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
+from assistant_gateway.chat_orchestrator.orchestration.orchestrator import (
+    ConversationOrchestrator,
+)
 from assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.config.base import (
     build_gateway_config,
 )
 
-# Build the config - this registers executors and creates ClauqBTM
+# Add the package to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Build the config - this creates ClauqBTM and GatewayConfig
 config = build_gateway_config()
 
-# Export the celery app for the worker
-celery_app = config.clauq_btm._create_celery_app()
+# CRITICAL: We need to trigger setup by creating the orchestrator
+# This registers the executor ("orchestrator.run_agent") and finalizes ClauqBTM setup
+# Without this, the Celery task won't be registered
+
+# Creating the orchestrator triggers AgentTaskManager.__init__
+# which calls clauq_btm.setup() to register executors
+orchestrator = ConversationOrchestrator(config)
+
+# Now we can export the celery app - it has the task registered
+celery_app = config.clauq_btm.celery_app
