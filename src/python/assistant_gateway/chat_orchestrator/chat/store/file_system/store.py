@@ -68,8 +68,18 @@ class FileSystemChatStore(ChatStore):
         return interaction.model_dump(mode='json')
 
     def _deserialize_interaction(self, data: Dict) -> AgentInteraction:
-        """Deserialize a dictionary to AgentInteraction."""
-        return AgentInteraction(**data)
+        """Deserialize a dictionary to the appropriate AgentInteraction subclass."""
+        from assistant_gateway.schemas import UserInput, AgentOutput, Role
+        
+        # Determine which subclass to use based on the role
+        role = data.get('role')
+        if role == Role.user or role == 'user':
+            return UserInput(**data)
+        elif role == Role.assistant or role == 'assistant':
+            return AgentOutput(**data)
+        else:
+            # Fallback to base class if role is unknown
+            return AgentInteraction(**data)
 
     async def create_chat(self, chat: ChatMetadata) -> ChatMetadata:
         async with self._lock:
