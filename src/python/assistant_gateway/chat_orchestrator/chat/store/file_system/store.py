@@ -56,16 +56,16 @@ class FileSystemChatStore(ChatStore):
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     def _serialize_chat(self, chat: ChatMetadata) -> Dict:
-        """Serialize ChatMetadata to a dictionary."""
-        return chat.model_dump()
+        """Serialize ChatMetadata to a dictionary with JSON-compatible types."""
+        return chat.model_dump(mode='json')
 
     def _deserialize_chat(self, data: Dict) -> ChatMetadata:
         """Deserialize a dictionary to ChatMetadata."""
         return ChatMetadata(**data)
 
     def _serialize_interaction(self, interaction: AgentInteraction) -> Dict:
-        """Serialize AgentInteraction to a dictionary."""
-        return interaction.model_dump()
+        """Serialize AgentInteraction to a dictionary with JSON-compatible types."""
+        return interaction.model_dump(mode='json')
 
     def _deserialize_interaction(self, data: Dict) -> AgentInteraction:
         """Deserialize a dictionary to AgentInteraction."""
