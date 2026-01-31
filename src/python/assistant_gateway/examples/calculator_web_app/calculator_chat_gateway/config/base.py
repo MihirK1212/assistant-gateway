@@ -1,6 +1,6 @@
 import os
 
-from assistant_gateway.chat_orchestrator.chat.store import InMemoryChatStore
+from assistant_gateway.chat_orchestrator.chat.store import FileSystemChatStore
 from assistant_gateway.chat_orchestrator.core.config import (
     AgentConfig,
     GatewayConfig,
@@ -44,6 +44,6 @@ def build_gateway_config() -> GatewayConfig:
             ),
         },
         default_fallback_config=default_fallback,
-        chat_store=InMemoryChatStore(),
+        chat_store=FileSystemChatStore(),
         clauq_btm=clauq_btm,
     )
