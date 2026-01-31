@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -42,18 +42,18 @@ class ClauqBTMTask(BaseModel):
         created_at: When the task was created
         updated_at: When the task was last updated
         payload: Arbitrary data needed for task execution
+        metadata: Application-specific metadata
         result: Task execution result (set on completion)
         error: Error message (set on failure)
-        executor: Embedded executor function (for in-memory mode)
-        executor_name: Name of registered executor (for distributed mode)
+        executor_name: Name of registered executor (required for background tasks)
 
     Execution Modes:
         1. Sync: Set `is_background_task=False`, `queue_id=None` - executes inline
-        2. Background (In-memory): Set `is_background_task=True`, `queue_id` required, set `executor` directly
-        3. Background (Distributed/Celery): Set `is_background_task=True`, `queue_id` required, set `executor_name`
-    """
+        2. Background: Set `is_background_task=True`, `queue_id` required, `executor_name` required
 
-    model_config = {"arbitrary_types_allowed": True}
+    For background tasks, executors are looked up from the ExecutorRegistry by name.
+    Executors must be pre-registered at application startup.
+    """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     is_background_task: bool = Field(
@@ -92,17 +92,10 @@ class ClauqBTMTask(BaseModel):
     result: Optional[Any] = None
     error: Optional[str] = None
 
-    # For in-memory execution: embedded executor function
-    executor: Optional[Callable[["ClauqBTMTask"], Awaitable[Any]]] = Field(
-        default=None,
-        exclude=True,  # Don't serialize the executor
-        description="The async function that executes this task (for in-memory mode)",
-    )
-
-    # For distributed execution: name of registered executor
+    # Name of registered executor (required for background tasks)
     executor_name: Optional[str] = Field(
         default=None,
-        description="Name of the registered executor function (for distributed mode)",
+        description="Name of the registered executor function (looked up from ExecutorRegistry)",
     )
 
     def is_terminal(self) -> bool:
@@ -116,12 +109,3 @@ class ClauqBTMTask(BaseModel):
     def is_interrupted(self) -> bool:
         """Check if the task was interrupted."""
         return self.status == TaskStatus.interrupted
-
-    async def execute(self) -> Any:
-        """Execute this task using the embedded executor."""
-        if self.executor is None:
-            raise RuntimeError(
-                "Task executor not set. For in-memory mode, set task.executor. "
-                "For distributed mode, the worker handles execution via executor_name."
-            )
-        return await self.executor(self)

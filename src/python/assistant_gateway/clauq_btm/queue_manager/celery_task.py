@@ -1,5 +1,13 @@
 """
 Celery task definition for executing ClauqBTMTask.
+
+The execute_task is a single pre-registered Celery task that:
+1. Looks up the executor by name from the registry
+2. Checks for interruption before/after execution
+3. Runs the executor
+4. Runs post_execution callback if registered
+5. Updates task state in Redis
+6. Publishes completion events
 """
 
 from __future__ import annotations
@@ -12,12 +20,12 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from assistant_gateway.clauq_btm.schemas import TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEventType
 from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
-from assistant_gateway.clauq_btm.queue_manager.celery_qm.constants import (
+from assistant_gateway.clauq_btm.queue_manager.constants import (
     TASK_KEY_PREFIX,
     EVENTS_CHANNEL_PREFIX,
     COMPLETED_TASK_TTL,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery_qm.serialization import (
+from assistant_gateway.clauq_btm.queue_manager.serialization import (
     deserialize_task,
 )
 
@@ -35,8 +43,16 @@ def create_celery_task(
     """
     Create the Celery task that executes ClauqBTMTask.
 
-    This should be called once when setting up your Celery app.
-    The task will look up executors from the executor_registry.
+    This should be called once during application initialization (at import time
+    for the module that both API servers and workers import). The task looks up
+    executors from the executor_registry by name.
+
+    IMPORTANT: The executor_registry must have all executors registered BEFORE
+    this function is called and before Celery workers start.
+
+    Args:
+        celery_app: The Celery application instance
+        executor_registry: Registry containing pre-registered executors
     """
 
     @celery_app.task(
@@ -57,10 +73,13 @@ def create_celery_task(
 
         This task:
         1. Deserializes the task
-        2. Looks up the executor by name
-        3. Runs the executor (handles async)
-        4. Updates task state in Redis
-        5. Publishes completion event
+        2. Checks if task was interrupted before starting
+        3. Looks up the executor by name from the registry
+        4. Runs the executor (handles async)
+        5. Checks if task was interrupted after execution
+        6. Runs post_execution callback if registered
+        7. Updates task state in Redis
+        8. Publishes completion event
         """
         import asyncio
         import redis
@@ -73,6 +92,13 @@ def create_celery_task(
         task_key = f"{TASK_KEY_PREFIX}{task_id}"
         events_channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
 
+        def _get_task_status() -> Optional[str]:
+            """Get current task status from Redis."""
+            status = redis_client.hget(task_key, "status")
+            if isinstance(status, bytes):
+                return status.decode()
+            return status
+
         def _update_task_state(
             status: TaskStatus,
             result: Optional[Dict[str, Any]] = None,
@@ -80,7 +106,7 @@ def create_celery_task(
         ) -> None:
             """Update task state in Redis."""
             now = datetime.now(timezone.utc).isoformat()
-            updates = {
+            updates: Dict[str, Any] = {
                 "status": status.value,
                 "updated_at": now,
             }
@@ -134,14 +160,24 @@ def create_celery_task(
             redis_client.publish(events_channel, json.dumps(event))
 
         try:
+            # Check if interrupted before starting
+            current_status = _get_task_status()
+            if current_status == TaskStatus.interrupted.value:
+                logger.info(f"Task {task_id} was interrupted before starting")
+                _publish_event(TaskEventType.INTERRUPTED, error="Task was interrupted")
+                return {"status": "interrupted"}
+
             # Mark as in progress
             _update_task_state(TaskStatus.in_progress)
             _publish_event(TaskEventType.STARTED)
 
-            # Get executor
-            executor = executor_registry.get(executor_name)
-            if executor is None:
-                raise RuntimeError(f"Executor '{executor_name}' not found in registry")
+            # Get executor config from registry
+            executor_config = executor_registry.get_config(executor_name)
+            if executor_config is None:
+                raise RuntimeError(
+                    f"Executor '{executor_name}' not found in registry. "
+                    "Make sure executors are registered before starting workers."
+                )
 
             # Deserialize task
             task = deserialize_task(task_data)
@@ -150,7 +186,21 @@ def create_celery_task(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(executor(task))
+                result = loop.run_until_complete(executor_config.executor(task))
+
+                # Check if interrupted during execution
+                current_status = _get_task_status()
+                if current_status == TaskStatus.interrupted.value:
+                    logger.info(f"Task {task_id} was interrupted during execution")
+                    _publish_event(
+                        TaskEventType.INTERRUPTED, error="Task was interrupted"
+                    )
+                    return {"status": "interrupted"}
+
+                # Run post_execution callback if registered
+                if executor_config.post_execution is not None:
+                    loop.run_until_complete(executor_config.post_execution(task, result))
+
             finally:
                 loop.close()
 

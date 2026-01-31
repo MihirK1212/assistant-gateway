@@ -5,8 +5,9 @@ Coordinates chat lifecycle, persistence, background processing, and agent
 session reuse. Supports both synchronous and background execution modes.
 
 For Celery/distributed execution:
-- Register executors at startup using `register_executors()`
-- Celery workers must import this module to access the registered executors
+- The same module that creates the orchestrator must be imported by workers
+- Executors are registered at initialization time
+- Workers will have access to the same registered executors
 """
 
 from __future__ import annotations
@@ -55,18 +56,20 @@ class ConversationOrchestrator:
     - Sync tasks: Executed directly by the orchestrator
     - Background tasks: Submitted to task manager's queue for execution
 
+    For Celery/distributed execution:
+    - Executors are registered at initialization (in __init__)
+    - The same orchestrator setup must be used by workers
+    - Import the module that creates the orchestrator in your worker config
+
     Lifecycle:
-    - Call start() to register executors and start background task processing
+    - Call start() to start background task processing
     - Call stop() for graceful shutdown
     - Can be used as async context manager:
 
         async with ConversationOrchestrator(config=config) as orchestrator:
             await orchestrator.send_message(...)
-
-    For Celery workers:
-    - Just call start() - it registers executors automatically
-    - Celery workers must have the same orchestrator setup to access executors
     """
+
     def __init__(
         self,
         *,
@@ -74,7 +77,6 @@ class ConversationOrchestrator:
     ) -> None:
         self._config = config
         self._chat_store = self._config.get_chat_store()
-        self._task_manager = AgentTaskManager(self._config.get_queue_manager())
         self._chat_locks: Dict[str, asyncio.Lock] = {}
 
         agent_configs = self._config.get_agent_configs()
@@ -84,6 +86,14 @@ class ConversationOrchestrator:
         self._agent_session_manager = AgentSessionManager(
             agent_configs=agent_configs,
             default_fallback_config=self._config.default_fallback_config,
+        )
+
+        # Create task manager with executor registration
+        # This registers executors at init time for distributed execution
+        self._task_manager = AgentTaskManager(
+            clauq_btm=self._config.get_clauq_btm(),
+            executor=self._run_agent_for_task,
+            post_execution=self._persist_assistant_response,
         )
 
     async def create_chat(
@@ -312,11 +322,8 @@ class ConversationOrchestrator:
         task, assistant_response = await self._task_manager.create_and_execute_task(
             chat=chat,
             interaction_id=user_input_interaction.id,
-            executor=self._run_agent_for_task,
-            post_execution=self._persist_assistant_response,
             executor_payload=executor_payload,
             run_in_background=run_in_background,
-            executor_name="orchestrator.run_agent" if run_in_background else None,
         )
         await self._add_task_to_chat(chat, task)
         return chat, assistant_response, task
@@ -331,8 +338,7 @@ class ConversationOrchestrator:
         - Sync mode: Receives Pydantic objects directly via kwargs
         - Background/Celery mode: Receives serialized dicts in task.payload
 
-        Note: Interrupt checking should be done by the caller before/after
-        calling this method. For background tasks, the queue manager handles it.
+        Note: Interrupt checking is handled by the queue manager/BTM layer.
         """
         payload = RunAgentExecutorPayload.deserialize(executor_payload)
 
@@ -449,3 +455,29 @@ class ConversationOrchestrator:
             yield
         finally:
             lock.release()
+
+    # -------------------------------------------------------------------------
+    # Lifecycle Management
+    # -------------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Start the orchestrator and its task manager."""
+        await self._task_manager.start()
+
+    async def stop(self) -> None:
+        """Stop the orchestrator gracefully."""
+        await self._task_manager.stop()
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True if the orchestrator is running."""
+        return self._task_manager.is_running
+
+    async def __aenter__(self) -> "ConversationOrchestrator":
+        """Start the orchestrator when entering context."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Stop the orchestrator when exiting context."""
+        await self.stop()

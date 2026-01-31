@@ -4,14 +4,14 @@ Redis pub/sub event subscription for the Celery queue manager.
 
 from __future__ import annotations
 
+import abc
 import asyncio
 import json
 import logging
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
 from assistant_gateway.clauq_btm.events import TaskEvent
-from assistant_gateway.clauq_btm.queue_manager.base import EventSubscription
-from assistant_gateway.clauq_btm.queue_manager.celery_qm.serialization import (
+from assistant_gateway.clauq_btm.queue_manager.serialization import (
     deserialize_event,
 )
 
@@ -21,6 +21,37 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------------------------
+# Event Subscription Base Class
+# -----------------------------------------------------------------------------
+
+
+class EventSubscription(abc.ABC):
+    """
+    Abstract subscription to task events.
+
+    Implementations should support async iteration:
+        async for event in subscription:
+            print(event)
+    """
+
+    @abc.abstractmethod
+    def __aiter__(self) -> AsyncIterator[TaskEvent]:
+        """Iterate over events."""
+        ...
+
+    @abc.abstractmethod
+    async def close(self) -> None:
+        """Close the subscription and release resources."""
+        ...
+
+    async def __aenter__(self) -> "EventSubscription":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.close()
 
 
 class RedisEventSubscription(EventSubscription):

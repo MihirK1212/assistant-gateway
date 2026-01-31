@@ -1,5 +1,11 @@
 """
 Celery-based distributed queue manager implementation.
+
+IMPORTANT: For distributed execution to work correctly:
+1. Create an ExecutorRegistry and register all executors at module level
+2. Pass the same registry to CeleryQueueManager
+3. Both API servers and Celery workers must import the same module
+4. This ensures all processes have access to the same executors
 """
 
 from __future__ import annotations
@@ -9,6 +15,7 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
     Any,
@@ -21,16 +28,8 @@ from typing import (
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
-from assistant_gateway.clauq_btm.executor_registry import (
-    ExecutorRegistry,
-    default_executor_registry,
-)
-from assistant_gateway.clauq_btm.queue_manager.base import (
-    EventSubscription,
-    QueueInfo,
-    QueueManager,
-)
-from assistant_gateway.clauq_btm.queue_manager.celery_qm.constants import (
+from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
+from assistant_gateway.clauq_btm.queue_manager.constants import (
     TASK_KEY_PREFIX,
     QUEUE_KEY_PREFIX,
     QUEUE_META_PREFIX,
@@ -39,16 +38,17 @@ from assistant_gateway.clauq_btm.queue_manager.celery_qm.constants import (
     ALL_EVENTS_CHANNEL,
     COMPLETED_TASK_TTL,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery_qm.serialization import (
+from assistant_gateway.clauq_btm.queue_manager.serialization import (
     serialize_task,
     serialize_event,
     deserialize_task,
     serialize_for_redis_hset,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery_qm.subscription import (
+from assistant_gateway.clauq_btm.queue_manager.subscription import (
+    EventSubscription,
     RedisEventSubscription,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery_qm.celery_task import (
+from assistant_gateway.clauq_btm.queue_manager.celery_task import (
     create_celery_task,
 )
 
@@ -60,64 +60,100 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class CeleryQueueManager(QueueManager):
+# -----------------------------------------------------------------------------
+# Queue Info
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class QueueInfo:
+    """Information about a task queue."""
+
+    queue_id: str
+    pending_count: int
+    current_task_id: Optional[str] = None
+    is_processing: bool = False
+    created_at: Optional[datetime] = None
+
+
+class CeleryQueueManager:
+    """
+    Distributed task queue manager using Celery and Redis.
+
+    Features:
+    - Distributed task execution via Celery workers
+    - Persistent task state in Redis
+    - FIFO ordering per queue using Redis sorted sets
+    - Real-time event subscription via Redis pub/sub
+    - Task interruption via Celery revoke
+
+    IMPORTANT: Executors must be registered in the executor_registry before
+    tasks are enqueued. Both API servers and workers must have access to the
+    same registered executors.
+
+    Setup:
+        1. Create an ExecutorRegistry and register executors
+        2. Create a Celery app
+        3. Create CeleryQueueManager with the registry
+        4. Both API servers and workers must import the same module
+
+    Example:
+        # In shared_setup.py (imported by both API and workers)
+        from celery import Celery
+        from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
+        from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
+
+        # Create executor registry and register executors
+        executor_registry = ExecutorRegistry()
+
+        @executor_registry.register("process_data")
+        async def process_data(task: ClauqBTMTask) -> Any:
+            return {"processed": task.payload}
+
+        # Create Celery app and queue manager
+        celery_app = Celery('tasks', broker='redis://localhost:6379/0')
+        queue_manager = CeleryQueueManager(
+            celery_app=celery_app,
+            executor_registry=executor_registry,
+            redis_url='redis://localhost:6379/0',
+        )
+
+        # Run workers with: celery -A shared_setup worker
+
+    Args:
+        celery_app: Configured Celery application
+        executor_registry: Registry containing executors for task processing
+        redis_url: Redis connection URL
+    """
+
     def __init__(
         self,
         celery_app: "Celery",
-        redis_url: str = "redis://localhost:6379/0",
+        executor_registry: ExecutorRegistry,
+        redis_url: str,
     ) -> None:
         """
-        Distributed task queue manager using Celery and Redis.
-
-        Features:
-        - Distributed task execution via Celery workers
-        - Persistent task state in Redis
-        - FIFO ordering per queue using Redis sorted sets
-        - Real-time event subscription via Redis pub/sub
-        - Task interruption via Celery revoke
-
-        Setup:
-            1. Configure Celery app with Redis broker
-            2. Register executors with default_executor_registry
-            3. Run Celery workers with your task module
-            4. Use this class in your application
-
-        Example:
-            app = Celery('tasks', broker='redis://localhost:6379/0')
-
-            # Register executor
-            @default_executor_registry.register("process_data")
-            async def process_data(task: ClauqBTMTask) -> Any:
-                return {"processed": task.payload}
-
-            # Use queue manager
-            queue_manager = CeleryQueueManager(
-                celery_app=app,
-                redis_url='redis://localhost:6379/0',
-            )
-
-            async with queue_manager:
-                await queue_manager.enqueue(
-                    task=task,
-                    executor_name="process_data",
-                )
-
         Initialize the Celery queue manager.
+
+        The Celery task is registered at init time. Executors can be registered
+        in the executor_registry after init but before tasks are processed.
 
         Args:
             celery_app: Configured Celery application
+            executor_registry: Registry containing executors for task processing
             redis_url: Redis connection URL
         """
         self._celery_app = celery_app
         self._redis_url = redis_url
-        # Default to global registry for Celery worker compatibility
-        self._executor_registry: ExecutorRegistry = default_executor_registry
+        self._executor_registry = executor_registry
+
+        # Register Celery task at init time (critical for distributed execution)
+        # This ensures the task is available when workers import this module
+        # Executors can still be registered later - the registry is captured by reference
+        self._celery_task = create_celery_task(celery_app, self._executor_registry)
 
         # Redis async client (initialized on start)
         self._redis: Optional["Redis"] = None
-
-        # Celery task (created on start)
-        self._celery_task: Optional[Any] = None
 
         # State
         self._is_running = False
@@ -126,21 +162,18 @@ class CeleryQueueManager(QueueManager):
         self._lock = asyncio.Lock()
 
     # -------------------------------------------------------------------------
-    # Executor Registry
+    # Properties
     # -------------------------------------------------------------------------
 
-    def set_executor_registry(self, registry: ExecutorRegistry) -> None:
-        """
-        Set the executor registry for distributed execution.
+    @property
+    def celery_app(self) -> "Celery":
+        """Return the Celery application instance."""
+        return self._celery_app
 
-        By default, CeleryQueueManager uses default_executor_registry for
-        Celery worker compatibility. This method allows overriding with a
-        custom registry (e.g., for testing).
-
-        Args:
-            registry: The executor registry to use
-        """
-        self._executor_registry = registry
+    @property
+    def executor_registry(self) -> ExecutorRegistry:
+        """Return the executor registry."""
+        return self._executor_registry
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -150,12 +183,6 @@ class CeleryQueueManager(QueueManager):
         """Start the queue manager."""
         if self._is_running:
             return
-
-        if self._executor_registry is None:
-            raise RuntimeError(
-                "Executor registry not set. CeleryQueueManager must be used with "
-                "BTMTaskManager which sets the registry automatically."
-            )
 
         try:
             import redis.asyncio as aioredis
@@ -175,11 +202,6 @@ class CeleryQueueManager(QueueManager):
         # Test connection
         await self._redis.ping()
 
-        # Create Celery task
-        self._celery_task = create_celery_task(
-            self._celery_app, self._executor_registry
-        )
-
         self._is_running = True
         logger.info("CeleryQueueManager started")
 
@@ -195,14 +217,21 @@ class CeleryQueueManager(QueueManager):
             await self._redis.close()
             self._redis = None
 
-        self._celery_task = None
-
         logger.info("CeleryQueueManager stopped")
 
     @property
     def is_running(self) -> bool:
         """Returns True if the queue manager is running."""
         return self._is_running
+
+    async def __aenter__(self) -> "CeleryQueueManager":
+        """Start the queue manager when entering context."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Stop the queue manager when exiting context."""
+        await self.stop()
 
     def _ensure_running(self) -> None:
         """Raise if not running."""
@@ -309,8 +338,7 @@ class CeleryQueueManager(QueueManager):
 
     async def enqueue(
         self,
-        task: ClauqBTMTask,
-        executor_name: Optional[str] = None,
+        task: ClauqBTMTask
     ) -> None:
         """
         Add a task to the back of the queue.
@@ -320,25 +348,27 @@ class CeleryQueueManager(QueueManager):
 
         Args:
             task: The task to enqueue
-            executor_name: Name of the registered executor function
 
         Raises:
-            RuntimeError: If queue manager is not running or executor not specified
+            RuntimeError: If queue manager is not running
+            KeyError: If executor is not found in registry
         """
         self._ensure_running()
         assert self._redis is not None
 
+        # Use executor_name from task
+        executor_name = task.executor_name
         if executor_name is None:
             raise RuntimeError(
                 "executor_name is required for CeleryQueueManager. "
-                "Register your executor with default_executor_registry and provide its name."
+                "Set task.executor_name."
             )
 
-        # Verify executor is registered
-        if self._executor_registry.get(executor_name) is None:
-            logger.warning(
-                f"Executor '{executor_name}' not found in local registry. "
-                "Make sure it's registered in your Celery worker."
+        # Verify executor is registered (fail fast)
+        if executor_name not in self._executor_registry:
+            raise KeyError(
+                f"Executor '{executor_name}' not found in registry. "
+                "Make sure it's registered before enqueueing tasks."
             )
 
         queue_id = task.queue_id
@@ -346,6 +376,9 @@ class CeleryQueueManager(QueueManager):
         queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
         celery_task_key = f"{CELERY_TASK_PREFIX}{task.id}"
         events_channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
+
+        # Ensure executor_name is set on task
+        task.executor_name = executor_name
 
         # Serialize task
         task_data = serialize_task(task)
