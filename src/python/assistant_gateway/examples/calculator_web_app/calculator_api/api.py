@@ -35,13 +35,23 @@ def mihir_custom_log(message: str) -> dict:
     import os
     import time
     import random
-    from datetime import datetime
+    from datetime import datetime, timezone, timedelta
+
+    received_timestamp = datetime.now(
+        timezone.utc + timedelta(hours=5, minutes=30)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
     # Sleep for a random time between 60 and 80 seconds
     sleep_time = random.uniform(60, 80)
     time.sleep(sleep_time)
+
     log_file = os.path.join(os.path.dirname(__file__), "logs.txt")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[Timestamp: ({timestamp})] [Waiter: {sleep_time} seconds] {{{message}}}\n"
+
+    printed_timestamp = datetime.now(
+        timezone.utc + timedelta(hours=5, minutes=30)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[[Received at: ({received_timestamp})] [Printed at: ({printed_timestamp})] [Waited for: {sleep_time} seconds] {{{message}}}\n"
+
     with open(log_file, "a") as f:
         f.write(log_entry)
     return {"status": "logged", "message": message}
