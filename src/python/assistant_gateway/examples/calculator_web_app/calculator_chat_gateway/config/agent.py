@@ -125,6 +125,7 @@ class MihirCustomLogRESTTool(RESTTool):
             ),
             query_params_model=LogMessageQueryParamsModel,
             output_model=LogOutputModel,
+            timeout_seconds=200,
         )
 
 
