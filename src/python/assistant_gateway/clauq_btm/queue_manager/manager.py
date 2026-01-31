@@ -442,7 +442,7 @@ class CeleryQueueManager:
         # Deserialize JSON fields
         parsed_data: Dict[str, Any] = {}
         for k, v in data.items():
-            if k in ("result", "payload") and v:
+            if k in ("result", "payload", "metadata") and v:
                 try:
                     parsed_data[k] = json.loads(v)
                 except (json.JSONDecodeError, TypeError):
@@ -451,6 +451,8 @@ class CeleryQueueManager:
                 parsed_data[k] = None
             else:
                 parsed_data[k] = v
+
+        print('[BGDEBUG] get called with parsed_data:', parsed_data)
 
         return deserialize_task(parsed_data)
 
