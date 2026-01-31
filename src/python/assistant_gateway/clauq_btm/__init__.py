@@ -11,59 +11,88 @@ Features:
     - Generic task abstraction (ClauqBTMTask)
     - FIFO queue management per queue_id
     - Task lifecycle events (queued, started, completed, failed, interrupted)
-    - Pluggable queue backends (in-memory, Celery+Redis)
-    - Internal executor registry (managed by BTMTaskManager)
+    - Distributed execution via Celery+Redis
+    - Pre-registered executors via ExecutorRegistry
+    - Simplified setup via ClauqBTM instance manager with state validation
 
-Basic Usage:
-    from assistant_gateway.clauq_btm import (
-        BTMTaskManager,
-        ClauqBTMTask,
-        InMemoryQueueManager,
-    )
+IMPORTANT: For distributed execution (Celery), executors must be pre-registered
+at application initialization time. The same module that registers executors
+must be imported by both API servers and Celery workers.
 
-    # Create manager with in-memory backend
-    queue_manager = InMemoryQueueManager()
-    task_manager = BTMTaskManager(queue_manager)
+Celery/Redis Requirements:
+    - Celery and Redis are required for background task execution
+    - If Celery/Redis setup fails, background tasks will fail
+    - Sync tasks (create_and_execute_sync) always work regardless of Celery setup
 
-    async def my_executor(task: ClauqBTMTask) -> dict:
+Recommended Usage (Master Setup - simplest):
+    from assistant_gateway.clauq_btm import ClauqBTM
+
+    async def my_executor(task):
         return {"result": task.payload}
 
-    async with task_manager:
-        # Sync execution
-        task, result = await task_manager.create_and_execute_sync(
-            queue_id="my_queue",
-            executor=my_executor,
-        )
+    async def on_complete(task, result):
+        print(f"Task {task.id} completed")
 
-        # Background execution
+    # Single setup() call handles everything
+    clauq_btm = ClauqBTM(redis_url='redis://localhost:6379/0')
+    task_manager = clauq_btm.setup(executors={
+        'my_executor': {
+            'executor': my_executor,
+            'post_execution': on_complete,
+        },
+        'another_task': {
+            'executor': another_fn,
+        },
+    })
+
+    # For Celery workers, export:
+    celery_app = clauq_btm.celery_app
+
+    # Use task manager
+    async with clauq_btm:
         task = await task_manager.create_and_enqueue(
             queue_id="my_queue",
-            executor=my_executor,
-            executor_name="my_task",  # Registered internally
+            executor_name="my_executor",
         )
 
-Distributed Usage (Celery):
-    from assistant_gateway.clauq_btm import BTMTaskManager, ClauqBTMTask
-    from assistant_gateway.clauq_btm.queue_manager.celery import (
-        CeleryQueueManager,
-        create_celery_app,
+    # Run workers with: celery -A your_module worker
+
+Alternative Usage (Manual Registration):
+    from assistant_gateway.clauq_btm import ClauqBTM
+
+    clauq_btm = ClauqBTM(redis_url='redis://localhost:6379/0')
+
+    # Register executors one by one
+    clauq_btm.register_executor(
+        name="my_executor",
+        executor=my_executor_fn,
+        post_execution=my_callback,
     )
 
-    # Create Celery backend
-    app = create_celery_app()
-    queue_manager = CeleryQueueManager(celery_app=app)
-    task_manager = BTMTaskManager(queue_manager)
-
-    # Executors are registered automatically via create_and_enqueue
+    # Finalize setup
+    task_manager = clauq_btm.finalize_setup()
+    celery_app = clauq_btm.celery_app
 """
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
 from assistant_gateway.clauq_btm.task_manager import BTMTaskManager
+from assistant_gateway.clauq_btm.executor_registry import (
+    ExecutorRegistry,
+    ExecutorConfig,
+    ExecutorFunc,
+    PostExecutionFunc,
+)
 from assistant_gateway.clauq_btm.queue_manager import (
     QueueInfo,
-    QueueManager,
-    InMemoryQueueManager,
+    CeleryQueueManager,
+)
+from assistant_gateway.clauq_btm.instance import (
+    BackgroundTasksUnavailableError,
+    ClauqBTM,
+    ClauqBTMConfig,
+    ClauqBTMSetupError,
+    SetupState,
 )
 
 __all__ = [
@@ -75,10 +104,18 @@ __all__ = [
     "TaskEventType",
     # Task manager
     "BTMTaskManager",
+    # Executor registry
+    "ExecutorRegistry",
+    "ExecutorConfig",
+    "ExecutorFunc",
+    "PostExecutionFunc",
     # Queue manager
     "QueueInfo",
-    "QueueManager",
-    "InMemoryQueueManager",
-    # Note: CeleryQueueManager is imported from .queue_manager.celery
-    # to avoid requiring celery/redis as mandatory dependencies
+    "CeleryQueueManager",
+    # Instance manager
+    "BackgroundTasksUnavailableError",
+    "ClauqBTM",
+    "ClauqBTMConfig",
+    "ClauqBTMSetupError",
+    "SetupState",
 ]

@@ -125,6 +125,7 @@ class MihirCustomLogRESTTool(RESTTool):
             ),
             query_params_model=LogMessageQueryParamsModel,
             output_model=LogOutputModel,
+            timeout_seconds=200,
         )
 
 
@@ -197,9 +198,6 @@ def build_calculator_agent(
     """
 
     backend_url = "http://127.0.0.1:5000"
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    print("Anthropic API Key:", api_key)
 
     agent_level_input_overrides = {"backend_url": backend_url}
 

@@ -1,45 +1,83 @@
 """
 Queue Manager module for the Clau-Queue Background Task Manager.
 
-Provides abstractions and implementations for task queue management:
-- QueueManager: Abstract base class defining the interface
-- InMemoryQueueManager: Single-process implementation using asyncio
-- CeleryQueueManager: Distributed implementation using Celery + Redis
+This implementation uses Celery for distributed task execution and Redis for:
+- Task state persistence
+- FIFO queue management per queue_id
+- Real-time event pub/sub for subscribers
+
+Architecture:
+    ┌─────────────────┐      ┌─────────────────┐
+    │  Application    │      │  Celery Worker  │
+    │  (enqueue)      │─────▶│  (execute)      │
+    └────────┬────────┘      └────────┬────────┘
+             │                        │
+             ▼                        ▼
+    ┌─────────────────────────────────────────┐
+    │              Redis                       │
+    │  - Task State (Hash)                    │
+    │  - Queue (Sorted Set for FIFO)          │
+    │  - Events (Pub/Sub)                     │
+    └─────────────────────────────────────────┘
 
 Usage:
-    # In-memory (development/testing)
-    from assistant_gateway.clauq_btm.queue_manager import InMemoryQueueManager
+    # In shared_setup.py (imported by both API and workers)
+    from celery import Celery
+    from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
 
-    async with InMemoryQueueManager() as qm:
-        await qm.enqueue(task)
-
-    # Celery (production/distributed)
-    from assistant_gateway.clauq_btm.queue_manager.celery import (
-        CeleryQueueManager,
-        create_celery_app,
+    celery_app = Celery('tasks', broker='redis://localhost:6379/0')
+    queue_manager = CeleryQueueManager(
+        celery_app=celery_app,
+        redis_url='redis://localhost:6379/0',
     )
 
-    app = create_celery_app()
-    qm = CeleryQueueManager(celery_app=app)
+    # Register executors (can be done after manager creation)
+    @queue_manager.executor_registry.register("my_executor")
+    async def my_executor(task: ClauqBTMTask) -> Any:
+        return {"result": task.payload}
 
-    async with qm:
-        await qm.enqueue(task, executor_name="my_task")
+    # Use queue manager
+    async with queue_manager:
+        await queue_manager.enqueue(task, executor_name="my_executor")
+
+    # Run workers with: celery -A shared_setup worker
 """
 
-from assistant_gateway.clauq_btm.queue_manager.base import (
-    EventSubscription,
+from assistant_gateway.clauq_btm.queue_manager.manager import (
+    CeleryQueueManager,
     QueueInfo,
-    QueueManager,
 )
-from assistant_gateway.clauq_btm.queue_manager.in_memory import InMemoryQueueManager
+from assistant_gateway.clauq_btm.queue_manager.celery_task import (
+    create_celery_task,
+)
+from assistant_gateway.clauq_btm.queue_manager.subscription import (
+    EventSubscription,
+    RedisEventSubscription,
+)
+from assistant_gateway.clauq_btm.queue_manager.constants import (
+    TASK_KEY_PREFIX,
+    QUEUE_KEY_PREFIX,
+    QUEUE_META_PREFIX,
+    CELERY_TASK_PREFIX,
+    EVENTS_CHANNEL_PREFIX,
+    ALL_EVENTS_CHANNEL,
+    COMPLETED_TASK_TTL,
+)
 
 __all__ = [
-    # Base classes and types
-    "EventSubscription",
+    # Main classes
+    "CeleryQueueManager",
+    "RedisEventSubscription",
     "QueueInfo",
-    "QueueManager",
-    # Implementations
-    "InMemoryQueueManager",
-    # Note: CeleryQueueManager is imported from .celery submodule
-    # to avoid requiring celery/redis as mandatory dependencies
+    "EventSubscription",
+    # Factory function
+    "create_celery_task",
+    # Constants
+    "TASK_KEY_PREFIX",
+    "QUEUE_KEY_PREFIX",
+    "QUEUE_META_PREFIX",
+    "CELERY_TASK_PREFIX",
+    "EVENTS_CHANNEL_PREFIX",
+    "ALL_EVENTS_CHANNEL",
+    "COMPLETED_TASK_TTL",
 ]

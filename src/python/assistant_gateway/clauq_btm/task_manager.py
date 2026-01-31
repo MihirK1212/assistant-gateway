@@ -2,23 +2,30 @@
 Task Manager for the Clau-Queue Background Task Manager.
 
 Provides a unified interface for both synchronous and background task execution.
-Handles task lifecycle management, interrupt handling, and queue coordination.
+Handles task lifecycle management and queue coordination.
 
-The executor registry is internal to this module - external code should not
-interact with it directly. Executors are registered automatically when
-create_and_enqueue is called with both executor and executor_name.
+For distributed execution (Celery), executors must be pre-registered at
+application initialization time. The same module that registers executors
+must be imported by both API servers and Celery workers.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
-from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
-from assistant_gateway.clauq_btm.queue_manager.base import QueueManager
+
+if TYPE_CHECKING:
+    from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
+
+
+class BackgroundTasksUnavailableError(Exception):
+    """Raised when background task operations are attempted but queue manager is not available."""
+
+    pass
 
 
 # Type alias for task executor: (task) -> Any
@@ -35,51 +42,48 @@ class BTMTaskManager:
     This manager provides:
     - Unified task creation for sync and background modes
     - Task lifecycle management (get, interrupt, wait)
-    - Sync task execution (inline)
-    - Background task execution (via queue manager)
-    - Internal executor registry management (hidden from external code)
+    - Sync task execution (inline, no queue required)
+    - Background task execution (via queue manager, queue_id required)
 
-    The executor registry is managed internally. When create_and_enqueue is called
-    with both executor and executor_name, the executor is automatically registered.
-    External code should not need to interact with the registry directly.
+    For background tasks, executors must be pre-registered in the queue manager's
+    executor_registry before tasks are enqueued. The BTMTaskManager does not
+    maintain its own registry - it delegates to the queue manager.
 
-    Usage (sync mode):
+    The queue_manager is optional:
+    - If provided: Both sync and background tasks work
+    - If None: Only sync tasks work; background tasks raise BackgroundTasksUnavailableError
+
+    Usage (sync mode - executor passed directly):
         task_manager = BTMTaskManager(queue_manager)
         async with task_manager:
             task, result = await task_manager.create_and_execute_sync(
-                queue_id="my_queue",
                 executor=my_executor,
             )
 
-    Usage (background mode):
+    Usage (background mode - executor looked up by name):
+        # Executor must be pre-registered in queue_manager.executor_registry
         task_manager = BTMTaskManager(queue_manager)
         async with task_manager:
             task = await task_manager.create_and_enqueue(
                 queue_id="my_queue",
-                executor=my_executor,
-                executor_name="my_task",  # Auto-registered internally
+                executor_name="my_task",  # Must be pre-registered
             )
             result = await task_manager.wait_for_completion(task.id)
     """
 
-    def __init__(self, queue_manager: QueueManager) -> None:
+    def __init__(self, queue_manager: Optional["CeleryQueueManager"] = None) -> None:
         """
         Initialize the task manager.
 
         Args:
-            queue_manager: The queue manager for background task execution
+            queue_manager: Optional queue manager for background task execution.
+                          If None, only sync tasks will be available.
+                          Must have executor_registry with pre-registered executors.
         """
         self._queue_manager = queue_manager
         self._lock = asyncio.Lock()
 
-        # Internal executor registry - managed by this class
-        self._executor_registry = ExecutorRegistry()
-
-        # Share registry with queue manager (for Celery distributed execution)
-        if hasattr(queue_manager, "set_executor_registry"):
-            queue_manager.set_executor_registry(self._executor_registry)
-
-        # Maps task_id -> queue_id for all tasks (sync and background)
+        # Maps task_id -> queue_id for background tasks only (sync tasks don't have queue_id)
         self._task_queue_mapping: Dict[str, str] = {}
 
         # Maps task_id -> ClauqBTMTask for sync tasks (background tasks stored in queue manager)
@@ -91,7 +95,9 @@ class BTMTaskManager:
 
     def create_task(
         self,
-        queue_id: str,
+        is_background_task: bool,
+        queue_id: Optional[str] = None,
+        executor_name: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ClauqBTMTask:
@@ -99,7 +105,9 @@ class BTMTaskManager:
         Create a new task with auto-generated ID.
 
         Args:
-            queue_id: The queue to assign the task to
+            is_background_task: Whether this is a background task (queued) or sync task
+            queue_id: The queue to assign the task to (required for background tasks, must be None for sync tasks)
+            executor_name: Name of pre-registered executor (required for background tasks)
             payload: Optional data payload for task execution
             metadata: Optional application-specific metadata
 
@@ -109,7 +117,9 @@ class BTMTaskManager:
         now = datetime.now(timezone.utc)
         return ClauqBTMTask(
             id=str(uuid4()),
+            is_background_task=is_background_task,
             queue_id=queue_id,
+            executor_name=executor_name,
             status=TaskStatus.pending,
             created_at=now,
             updated_at=now,
@@ -119,7 +129,6 @@ class BTMTaskManager:
 
     async def create_and_execute_sync(
         self,
-        queue_id: str,
         executor: TaskExecutor,
         post_execution: Optional[PostExecutionCallback] = None,
         payload: Optional[Dict[str, Any]] = None,
@@ -131,8 +140,9 @@ class BTMTaskManager:
         The task runs immediately in the current context, not via the queue.
         Handles the full lifecycle: create -> check interrupt -> run -> post-execute.
 
+        For sync execution, the executor is passed directly (not looked up from registry).
+
         Args:
-            queue_id: The queue ID (for tracking purposes)
             executor: The async function that executes the task
             post_execution: Optional callback after successful execution
             payload: Optional data payload for task execution
@@ -141,12 +151,17 @@ class BTMTaskManager:
         Returns:
             Tuple of (task, result) where result is None if interrupted
         """
-        # Create the task
-        task = self.create_task(queue_id, payload, metadata)
+        # Create the task (sync tasks don't have a queue_id or executor_name)
+        task = self.create_task(
+            is_background_task=False,
+            queue_id=None,
+            executor_name=None,
+            payload=payload,
+            metadata=metadata,
+        )
 
-        # Register the task
+        # Register the task (sync tasks are tracked by task_id only, no queue_id)
         async with self._lock:
-            self._task_queue_mapping[task.id] = queue_id
             self._sync_tasks[task.id] = task
 
         # Check if already interrupted before starting
@@ -182,68 +197,52 @@ class BTMTaskManager:
     async def create_and_enqueue(
         self,
         queue_id: str,
-        executor: TaskExecutor,
         executor_name: str,
-        post_execution: Optional[PostExecutionCallback] = None,
         payload: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ClauqBTMTask:
         """
         Create and enqueue a task for background execution.
 
-        The executor is automatically registered in the internal registry
-        using the provided executor_name. This registration is required for
-        distributed execution (e.g., Celery workers).
-
-        For in-memory execution, the executor is also embedded in the task.
+        The executor is looked up by name from the queue manager's executor_registry.
+        Executors must be pre-registered before calling this method.
 
         Args:
             queue_id: The queue to add the task to
-            executor: The executor function (required)
-            executor_name: Name for the executor (required, used for registration)
-            post_execution: Optional callback after successful execution
+            executor_name: Name of the pre-registered executor (required)
             payload: Optional data payload for task execution
             metadata: Optional application-specific metadata
 
         Returns:
             The created task (already enqueued)
+
+        Raises:
+            BackgroundTasksUnavailableError: If queue manager is not available
+            KeyError: If executor_name is not found in the registry
         """
-        # Create the task
-        task = self.create_task(queue_id, payload, metadata)
+        if self._queue_manager is None:
+            raise BackgroundTasksUnavailableError(
+                "Background tasks are not available because queue manager setup failed. "
+                "Use create_and_execute_sync() for synchronous task execution."
+            )
 
-        # Create wrapper that handles post-execution and interrupt checking
-        async def wrapped_executor(t: ClauqBTMTask) -> Any:
-            # Check if interrupted before starting
-            current = await self.get_task(t.id)
-            if current and current.is_interrupted():
-                return None
-
-            # Run the actual executor
-            result = await executor(t)
-
-            # Check if interrupted during execution
-            current = await self.get_task(t.id)
-            if current and current.is_interrupted():
-                return None
-
-            # Post-execution callback
-            if post_execution:
-                await post_execution(t, result)
-
-            return result
-
-        # Register the wrapped executor internally (for distributed execution)
-        self._executor_registry.add(executor_name, wrapped_executor)
-
-        # Also embed executor in task (for in-memory execution)
-        task.executor = wrapped_executor
+        # Create the task (background tasks require queue_id and executor_name)
+        task = self.create_task(
+            is_background_task=True,
+            queue_id=queue_id,
+            executor_name=executor_name,
+            payload=payload,
+            metadata=metadata,
+        )
+        
+        print('[BGDEBUG] clauq_btm task_manager create_and_enqueue task created:', task)
 
         # Track the mapping
         async with self._lock:
             self._task_queue_mapping[task.id] = queue_id
 
-        # Enqueue the task
-        await self._queue_manager.enqueue(task, executor_name=executor_name)
+        # Enqueue the task (executor looked up by name in queue manager)
+        await self._queue_manager.enqueue(task)
 
         return task
 
@@ -273,6 +272,8 @@ class BTMTaskManager:
             return None
 
         # Check background tasks in queue manager
+        if self._queue_manager is None:
+            return None
         return await self._queue_manager.get(queue_id, task_id)
 
     async def interrupt_task(self, task_id: str) -> Optional[ClauqBTMTask]:
@@ -312,6 +313,8 @@ class BTMTaskManager:
             return None
 
         # Interrupt background task via queue manager
+        if self._queue_manager is None:
+            return None
         return await self._queue_manager.interrupt(queue_id, task_id)
 
     async def wait_for_completion(
@@ -341,6 +344,8 @@ class BTMTaskManager:
         if queue_id is None:
             return None
 
+        if self._queue_manager is None:
+            return None
         return await self._queue_manager.wait_for_completion(queue_id, task_id, timeout)
 
     async def is_task_interrupted(self, task_id: str) -> bool:
@@ -377,21 +382,36 @@ class BTMTaskManager:
         Start the task manager and its underlying queue manager.
 
         This must be called before enqueueing background tasks.
+        If queue manager is not available, this is a no-op (sync tasks always work).
         """
-        await self._queue_manager.start()
+        if self._queue_manager is not None:
+            await self._queue_manager.start()
 
     async def stop(self) -> None:
         """
         Stop the task manager gracefully.
 
         Shuts down the queue manager and waits for running tasks to complete.
+        If queue manager is not available, this is a no-op.
         """
-        await self._queue_manager.stop()
+        if self._queue_manager is not None:
+            await self._queue_manager.stop()
 
     @property
     def is_running(self) -> bool:
-        """Returns True if the task manager is running."""
+        """
+        Returns True if the task manager is running.
+
+        If queue manager is not available, returns True (sync tasks always work).
+        """
+        if self._queue_manager is None:
+            return True  # Sync-only mode is always "running"
         return self._queue_manager.is_running
+
+    @property
+    def is_background_tasks_available(self) -> bool:
+        """Returns True if background tasks are available."""
+        return self._queue_manager is not None
 
     async def __aenter__(self) -> "BTMTaskManager":
         """Start the task manager when entering context."""
