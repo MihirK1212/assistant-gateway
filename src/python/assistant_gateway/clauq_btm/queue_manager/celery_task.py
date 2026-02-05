@@ -157,6 +157,7 @@ def create_celery_task(
                 "progress": None,
                 "task": task_data_decoded if task_data_decoded else None,
             }
+            logger.info(f"Publishing event: {event} for task {task_id}")
             redis_client.publish(events_channel, json.dumps(event))
 
         try:
