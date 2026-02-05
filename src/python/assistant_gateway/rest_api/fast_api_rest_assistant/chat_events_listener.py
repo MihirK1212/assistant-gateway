@@ -7,7 +7,7 @@ import websockets
 
 
 async def listen(chat_id: str):
-    url = f"ws://localhost:8000/chats/{chat_id}/events"
+    url = f"ws://127.0.0.1:8000/api/v1/chats/{chat_id}/events"
 
     async with websockets.connect(url) as ws:
         print(f"Connected to {url}")
