@@ -1,0 +1,31 @@
+# chat_event_listener.py
+
+import asyncio
+import json
+import sys
+import websockets
+
+
+async def listen(chat_id: str):
+    url = f"ws://localhost:8000/chats/{chat_id}/events"
+
+    async with websockets.connect(url) as ws:
+        print(f"Connected to {url}")
+
+        try:
+            async for message in ws:
+                event = json.loads(message)
+                print("Received event:")
+                print(json.dumps(event, indent=2))
+
+        except websockets.ConnectionClosed:
+            print("Connection closed")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python chat_event_listener.py <chat_id>")
+        sys.exit(1)
+
+    chat_id = sys.argv[1]
+    asyncio.run(listen(chat_id))

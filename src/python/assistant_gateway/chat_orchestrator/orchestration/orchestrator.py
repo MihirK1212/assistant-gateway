@@ -15,8 +15,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, AsyncIterator, Dict, List, Optional, Tuple, TYPE_CHECKING, Union
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
 
 from fastapi import HTTPException, status
 
@@ -255,6 +258,30 @@ class ConversationOrchestrator:
                 backend_server_context=backend_server_context,
                 run_in_background=run_in_background,
             )
+
+    @asynccontextmanager
+    async def subscribe_to_events(
+        self, chat_id: str
+    ) -> AsyncIterator["EventSubscription"]:
+        """
+        Subscribe to task events for a specific chat.
+
+        This allows real-time streaming of task lifecycle events (queued, started,
+        completed, failed, interrupted, progress) for all tasks in the given chat.
+
+        Args:
+            chat_id: The chat ID to subscribe to
+
+        Yields:
+            EventSubscription: An async iterator of TaskEvent objects
+
+        Example:
+            async with orchestrator.subscribe_to_events("chat-123") as subscription:
+                async for event in subscription:
+                    print(f"Event: {event.event_type} for task {event.task_id}")
+        """
+        async with self._task_manager.subscribe(chat_id) as subscription:
+            yield subscription
 
     async def _create_and_add_user_input_to_chat(
         self, chat: ChatMetadata, content: str, message_metadata: Optional[Dict] = None
