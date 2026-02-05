@@ -16,7 +16,7 @@ async def listen(chat_id: str):
             async for message in ws:
                 event = json.loads(message)
                 print("Received event:")
-                print(json.dumps(event, indent=2))
+                print("event_type: ", event["event_type"], "task_id: ", event["task_id"], "queue_id: ", event["queue_id"], "status: ", event["status"])
 
         except websockets.ConnectionClosed:
             print("Connection closed")
