@@ -27,6 +27,7 @@ from assistant_gateway.clauq_btm.queue_manager.constants import (
 )
 from assistant_gateway.clauq_btm.queue_manager.serialization import (
     deserialize_task,
+    serialize_task,
 )
 
 if TYPE_CHECKING:
@@ -131,21 +132,33 @@ def create_celery_task(
             """Publish event to Redis pub/sub."""
             # Get current task state
             task_data_raw = redis_client.hgetall(task_key)
-            task_data_decoded = {
+            task_data_decoded: Dict[str, Any] = {
                 k.decode() if isinstance(k, bytes) else k: (
                     v.decode() if isinstance(v, bytes) else v
                 )
                 for k, v in task_data_raw.items()
             }
 
-            # Handle result field if it's JSON
-            if "result" in task_data_decoded and task_data_decoded["result"]:
+            # Deserialize JSON fields (result, payload, metadata) stored as strings in Redis
+            for field in ("result", "payload", "metadata"):
+                if field in task_data_decoded and task_data_decoded[field]:
+                    try:
+                        task_data_decoded[field] = json.loads(
+                            task_data_decoded[field]
+                        )
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            # Properly serialize the task using the same format as manager.py
+            serialized_task = None
+            if task_data_decoded:
                 try:
-                    task_data_decoded["result"] = json.loads(
-                        task_data_decoded["result"]
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                    # Deserialize to ClauqBTMTask then serialize back to ensure consistent format
+                    task_obj = deserialize_task(task_data_decoded)
+                    serialized_task = serialize_task(task_obj)
+                except Exception as e:
+                    logger.warning(f"Failed to serialize task for event: {e}")
+                    serialized_task = None
 
             event = {
                 "event_type": event_type.value,
@@ -155,7 +168,7 @@ def create_celery_task(
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "error": error,
                 "progress": None,
-                "task": task_data_decoded if task_data_decoded else None,
+                "task": serialized_task,
             }
             logger.info(f"Publishing event: {event} for task {task_id}")
             redis_client.publish(events_channel, json.dumps(event))
