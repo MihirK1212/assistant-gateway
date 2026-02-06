@@ -15,7 +15,17 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, AsyncIterator, Dict, List, Optional, Tuple, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -394,14 +404,17 @@ class ConversationOrchestrator:
         # Skip persistence if response has no content
         if not response.messages and not response.final_text and not response.steps:
             return None
-        
+
         # the user input interaction id is the interaction id of the user input interaction that triggered the task
         user_input_interaction_id = task.interaction_id
         if not user_input_interaction_id:
-            raise ValueError("There must be a last user input interaction id for the task")
+            raise ValueError(
+                "There must be a last user input interaction id for the task"
+            )
 
         chat = await self.get_chat(task.chat_id)
-        stored_agent_response = AgentOutput(**response.model_dump(), user_input_interaction_id=user_input_interaction_id)
+        stored_agent_response = AgentOutput(**response.model_dump())
+        stored_agent_response.user_input_interaction_id = user_input_interaction_id
         await self._chat_store.append_interaction(chat.chat_id, stored_agent_response)
 
     async def _get_interactions_up_to(
@@ -446,23 +459,26 @@ class ConversationOrchestrator:
 
         return last_interaction
 
-    async def _list_interactions_in_sequence(self, chat_id: str) -> List[AgentInteraction]:
+    async def _list_interactions_in_sequence(
+        self, chat_id: str
+    ) -> List[AgentInteraction]:
         """
         List all interactions in the chat.
 
         Sort them by the following order:
-        1. User inputs should be sorted by created_at in ascending order 
+        1. User inputs should be sorted by created_at in ascending order
         2. Each assistant response should have an user_input_interaction_id associated with it. Place the assistant response after the user input that it is associated with.S
         3. Assign a sequence id / rank to each interaction based on the order of the interactions.
         """
         # Get all interactions from the store
         all_interactions = await self._chat_store.list_interactions(chat_id)
-        
+
         # Separate user inputs and assistant responses
         from assistant_gateway.schemas import Role
+
         user_inputs = []
         assistant_responses = {}  # Map user_input_id -> list of assistant responses
-        
+
         for interaction in all_interactions:
             if interaction.role == Role.user:
                 user_inputs.append(interaction)
@@ -472,28 +488,27 @@ class ConversationOrchestrator:
                 if user_input_id not in assistant_responses:
                     assistant_responses[user_input_id] = []
                 assistant_responses[user_input_id].append(interaction)
-        
+
         # Sort user inputs by created_at in ascending order
         user_inputs.sort(key=lambda x: x.created_at)
-        
+
         # Build the final ordered list
         ordered_interactions = []
         for user_input in user_inputs:
             # Add the user input
             ordered_interactions.append(user_input)
-            
+
             # Add any associated assistant responses (sorted by created_at for consistency)
             if user_input.id in assistant_responses:
                 responses = assistant_responses[user_input.id]
                 responses.sort(key=lambda x: x.created_at)
                 ordered_interactions.extend(responses)
-        
+
         # Assign sequence IDs
         for idx, interaction in enumerate(ordered_interactions):
             interaction.sequence_id = idx
-        
+
         return ordered_interactions
-    
 
     # -------------------------------------------------------------------------
     # Chat Update Helpers

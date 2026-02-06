@@ -14,6 +14,6 @@ python -m assistant_gateway.runner \
 
 
 '''
-chat 1: ec07a583-cca9-42fe-95e9-70800dc10b92
-chat 2: 4b2ad92a-be05-41bf-a924-4f8013ebfa89
+chat 1: 7c7ea853-de65-4cb7-8e21-0bf40e5bbb42
+chat 2: 
 '''
