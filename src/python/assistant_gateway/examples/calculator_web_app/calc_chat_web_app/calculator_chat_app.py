@@ -401,7 +401,7 @@ def api_create_chat(user_id: str) -> dict:
         "metadata": {},
         "extra_metadata": {},
     }
-    resp = requests.post(url, json=payload, timeout=30)
+    resp = requests.post(url, json=payload, timeout=(5, 15))
     resp.raise_for_status()
     return resp.json()
 
@@ -409,7 +409,7 @@ def api_create_chat(user_id: str) -> dict:
 def api_get_chat(chat_id: str) -> dict:
     """Get chat metadata."""
     url = f"{GATEWAY_BASE_URL}{API_PREFIX}/chats/{chat_id}"
-    resp = requests.get(url, timeout=15)
+    resp = requests.get(url, timeout=(5, 10))
     resp.raise_for_status()
     return resp.json()
 
@@ -417,7 +417,7 @@ def api_get_chat(chat_id: str) -> dict:
 def api_get_interactions(chat_id: str) -> dict:
     """Get all interactions for a chat, ordered by sequence."""
     url = f"{GATEWAY_BASE_URL}{API_PREFIX}/chats/{chat_id}/interactions"
-    resp = requests.get(url, timeout=15)
+    resp = requests.get(url, timeout=(5, 10))
     resp.raise_for_status()
     return resp.json()
 
@@ -433,8 +433,8 @@ def api_send_message(chat_id: str, content: str, run_mode: str = "sync") -> dict
         "backend_server_context": None,
     }
     # Background requests return quickly; sync may take longer
-    timeout = 30 if run_mode == "background" else 180
-    resp = requests.post(url, json=payload, timeout=timeout)
+    read_timeout = 15 if run_mode == "background" else 120
+    resp = requests.post(url, json=payload, timeout=(5, read_timeout))
     resp.raise_for_status()
     return resp.json()
 
@@ -442,7 +442,7 @@ def api_send_message(chat_id: str, content: str, run_mode: str = "sync") -> dict
 def api_get_task(chat_id: str, task_id: str) -> dict:
     """Get task status by ID."""
     url = f"{GATEWAY_BASE_URL}{API_PREFIX}/chats/{chat_id}/tasks/{task_id}"
-    resp = requests.get(url, timeout=15)
+    resp = requests.get(url, timeout=(5, 10))
     resp.raise_for_status()
     return resp.json()
 
@@ -913,13 +913,21 @@ with st.sidebar:
     if st.button("&#10024; New Chat", use_container_width=True):
         _stop_ws_listener()
         try:
-            resp = api_create_chat(st.session_state.user_id)
+            with st.spinner("Creating chat..."):
+                resp = api_create_chat(st.session_state.user_id)
             chat_data = resp.get("chat", {})
             st.session_state.chat_id = chat_data.get("chat_id")
             st.session_state.interactions = []
             st.session_state.bg_tasks = {}
             st.toast("New chat created!", icon="✅")
             st.rerun()
+        except requests.exceptions.ConnectionError:
+            st.error(
+                f"Cannot connect to the gateway server at "
+                f"**{GATEWAY_BASE_URL}**. Is it running?"
+            )
+        except requests.exceptions.Timeout:
+            st.error("Connection timed out. The gateway server may not be running.")
         except requests.exceptions.RequestException as exc:
             st.error(f"Failed to create chat: {exc}")
 
