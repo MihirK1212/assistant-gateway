@@ -931,20 +931,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Run-mode selection
-    st.markdown("### Execution Mode")
-    run_mode = st.radio(
-        "Choose how messages are processed:",
-        options=["sync", "background"],
-        format_func=lambda x: "&#9889; Synchronous" if x == "sync" else "&#128260; Background",
-        help=(
-            "**Sync**: Wait for the agent's response before continuing.\n\n"
-            "**Background**: Submit and keep chatting while the agent works."
-        ),
-    )
-
-    st.markdown("---")
-
     # Chat info
     st.markdown("### Chat Info")
     if st.session_state.chat_id:
@@ -1037,7 +1023,17 @@ else:
             placeholder="Ask the calculator agent... (e.g., 'What is 42 * 17?')",
             label_visibility="collapsed",
         )
-        submitted = st.form_submit_button("Send  &#10148;", use_container_width=True)
+        col_mode, col_send = st.columns([3, 1])
+        with col_mode:
+            run_mode = st.radio(
+                "Execution mode",
+                options=["sync", "background"],
+                horizontal=True,
+                format_func=lambda x: "⚡ Sync" if x == "sync" else "🔄 Background",
+                label_visibility="collapsed",
+            )
+        with col_send:
+            submitted = st.form_submit_button("Send  &#10148;", use_container_width=True)
 
         if submitted and user_input.strip():
             content = user_input.strip()
