@@ -53,6 +53,7 @@ class AgentInteraction(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    sequence_id: Optional[int] = Field(default=None, description="The sequence id of the interaction in the conversation")
     role: Role
 
 
@@ -75,6 +76,7 @@ class AgentOutput(AgentInteraction):
     steps: List[AgentStep] = Field(default_factory=list)
     final_text: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    user_input_interaction_id: Optional[str] = None
 
     def __init__(self, **data):
         super().__init__(**data)
