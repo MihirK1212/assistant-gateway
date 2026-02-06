@@ -918,7 +918,7 @@ with st.sidebar:
             st.session_state.chat_id = chat_data.get("chat_id")
             st.session_state.interactions = []
             st.session_state.bg_tasks = {}
-            st.toast("New chat created!", icon="&#9989;")
+            st.toast("New chat created!", icon="✅")
             st.rerun()
         except requests.exceptions.RequestException as exc:
             st.error(f"Failed to create chat: {exc}")
