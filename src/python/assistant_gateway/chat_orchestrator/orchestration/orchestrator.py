@@ -15,8 +15,21 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
 
 from fastapi import HTTPException, status
 
@@ -140,7 +153,7 @@ class ConversationOrchestrator:
         """
 
         chat = await self.get_chat(chat_id)
-        return await self._chat_store.list_interactions(chat.chat_id)
+        return await self._list_interactions_in_sequence(chat.chat_id)
 
     async def send_message(
         self,
@@ -256,6 +269,30 @@ class ConversationOrchestrator:
                 run_in_background=run_in_background,
             )
 
+    @asynccontextmanager
+    async def subscribe_to_events(
+        self, chat_id: str
+    ) -> AsyncIterator["EventSubscription"]:
+        """
+        Subscribe to task events for a specific chat.
+
+        This allows real-time streaming of task lifecycle events (queued, started,
+        completed, failed, interrupted, progress) for all tasks in the given chat.
+
+        Args:
+            chat_id: The chat ID to subscribe to
+
+        Yields:
+            EventSubscription: An async iterator of TaskEvent objects
+
+        Example:
+            async with orchestrator.subscribe_to_events("chat-123") as subscription:
+                async for event in subscription:
+                    print(f"Event: {event.event_type} for task {event.task_id}")
+        """
+        async with self._task_manager.subscribe(chat_id) as subscription:
+            yield subscription
+
     async def _create_and_add_user_input_to_chat(
         self, chat: ChatMetadata, content: str, message_metadata: Optional[Dict] = None
     ) -> UserInput:
@@ -366,10 +403,18 @@ class ConversationOrchestrator:
         """Persist the assistant response to the chat store."""
         # Skip persistence if response has no content
         if not response.messages and not response.final_text and not response.steps:
-            return
+            return None
+
+        # the user input interaction id is the interaction id of the user input interaction that triggered the task
+        user_input_interaction_id = task.interaction_id
+        if not user_input_interaction_id:
+            raise ValueError(
+                "There must be a last user input interaction id for the task"
+            )
 
         chat = await self.get_chat(task.chat_id)
         stored_agent_response = AgentOutput(**response.model_dump())
+        stored_agent_response.user_input_interaction_id = user_input_interaction_id
         await self._chat_store.append_interaction(chat.chat_id, stored_agent_response)
 
     async def _get_interactions_up_to(
@@ -379,7 +424,7 @@ class ConversationOrchestrator:
         Get all interactions up to and including the specified interaction_id.
         This is used when running/rerunning a task for a specific interaction.
         """
-        all_interactions = await self._chat_store.list_interactions(chat_id)
+        all_interactions = await self._list_interactions_in_sequence(chat_id)
         result = []
         for interaction in all_interactions:
             result.append(interaction)
@@ -394,7 +439,7 @@ class ConversationOrchestrator:
         Raises:
             HTTPException 400: If no interactions found or last interaction is not a UserInput
         """
-        interactions = await self._chat_store.list_interactions(chat.chat_id)
+        interactions = await self._list_interactions_in_sequence(chat.chat_id)
 
         if not interactions:
             raise HTTPException(
@@ -404,7 +449,7 @@ class ConversationOrchestrator:
 
         # Sort by created_at to ensure we get the chronologically last interaction
         # (store implementations may not guarantee order)
-        last_interaction = max(interactions, key=lambda x: x.created_at)
+        last_interaction = max(interactions, key=lambda x: x.sequence_id)
 
         if last_interaction.role != Role.user:
             raise HTTPException(
@@ -413,6 +458,57 @@ class ConversationOrchestrator:
             )
 
         return last_interaction
+
+    async def _list_interactions_in_sequence(
+        self, chat_id: str
+    ) -> List[AgentInteraction]:
+        """
+        List all interactions in the chat.
+
+        Sort them by the following order:
+        1. User inputs should be sorted by created_at in ascending order
+        2. Each assistant response should have an user_input_interaction_id associated with it. Place the assistant response after the user input that it is associated with.S
+        3. Assign a sequence id / rank to each interaction based on the order of the interactions.
+        """
+        # Get all interactions from the store
+        all_interactions = await self._chat_store.list_interactions(chat_id)
+
+        # Separate user inputs and assistant responses
+        from assistant_gateway.schemas import Role
+
+        user_inputs = []
+        assistant_responses = {}  # Map user_input_id -> list of assistant responses
+
+        for interaction in all_interactions:
+            if interaction.role == Role.user:
+                user_inputs.append(interaction)
+            elif interaction.role == Role.assistant:
+                # Group assistant responses by their associated user input
+                user_input_id = interaction.user_input_interaction_id
+                if user_input_id not in assistant_responses:
+                    assistant_responses[user_input_id] = []
+                assistant_responses[user_input_id].append(interaction)
+
+        # Sort user inputs by created_at in ascending order
+        user_inputs.sort(key=lambda x: x.created_at)
+
+        # Build the final ordered list
+        ordered_interactions = []
+        for user_input in user_inputs:
+            # Add the user input
+            ordered_interactions.append(user_input)
+
+            # Add any associated assistant responses (sorted by created_at for consistency)
+            if user_input.id in assistant_responses:
+                responses = assistant_responses[user_input.id]
+                responses.sort(key=lambda x: x.created_at)
+                ordered_interactions.extend(responses)
+
+        # Assign sequence IDs
+        for idx, interaction in enumerate(ordered_interactions):
+            interaction.sequence_id = idx
+
+        return ordered_interactions
 
     # -------------------------------------------------------------------------
     # Chat Update Helpers

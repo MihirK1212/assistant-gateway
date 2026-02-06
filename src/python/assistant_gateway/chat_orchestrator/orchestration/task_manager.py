@@ -17,7 +17,18 @@ time so that both API servers and workers have access to the same executors.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, TYPE_CHECKING, Union
+from contextlib import asynccontextmanager
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    Optional,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 
 from assistant_gateway.chat_orchestrator.core.schemas import (
     AgentTask,
@@ -33,6 +44,7 @@ from assistant_gateway.schemas import AgentOutput
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm import ClauqBTM
+    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
 
 
 # Type alias for task executor: (task, executor_payload) -> AgentOutput
@@ -274,6 +286,31 @@ class AgentTaskManager:
     async def is_task_interrupted(self, task_id: str) -> bool:
         """Check if a task has been interrupted."""
         return await self._btm_manager.is_task_interrupted(task_id)
+
+    # -------------------------------------------------------------------------
+    # Event Subscription
+    # -------------------------------------------------------------------------
+
+    @asynccontextmanager
+    async def subscribe(self, chat_id: str) -> AsyncIterator["EventSubscription"]:
+        """
+        Subscribe to task events for a specific chat.
+
+        Args:
+            chat_id: The chat ID to subscribe to
+
+        Yields:
+            EventSubscription: An async iterator of TaskEvent objects
+
+        Example:
+            async with task_manager.subscribe("chat-123") as subscription:
+                async for event in subscription:
+                    print(f"Event: {event.event_type} for task {event.task_id}")
+        """
+        async with self._btm_manager.subscribe(
+            queue_id=chat_id
+        ) as subscription:
+            yield subscription
 
     # -------------------------------------------------------------------------
     # Conversion Helpers

@@ -12,14 +12,16 @@ must be imported by both API servers and Celery workers.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
+    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
 
 
 class BackgroundTasksUnavailableError(Exception):
@@ -358,6 +360,37 @@ class BTMTaskManager:
         """
         task = await self.get_task(task_id)
         return task is not None and task.is_interrupted()
+
+    # -------------------------------------------------------------------------
+    # Event Subscription
+    # -------------------------------------------------------------------------
+
+    @asynccontextmanager
+    async def subscribe(self, queue_id: str) -> AsyncIterator["EventSubscription"]:
+        """
+        Subscribe to task events for a specific queue.
+
+        Args:
+            queue_id: The queue ID to subscribe to
+
+        Yields:
+            EventSubscription: An async iterator of TaskEvent objects
+
+        Raises:
+            BackgroundTasksUnavailableError: If queue manager is not available
+
+        Example:
+            async with task_manager.subscribe("my_queue") as subscription:
+                async for event in subscription:
+                    print(f"Event: {event.event_type} for task {event.task_id}")
+        """
+        if self._queue_manager is None:
+            raise BackgroundTasksUnavailableError(
+                "Event subscription is not available because queue manager setup failed."
+            )
+
+        async with self._queue_manager.subscribe(queue_id) as subscription:
+            yield subscription
 
     # -------------------------------------------------------------------------
     # Internal Helpers
