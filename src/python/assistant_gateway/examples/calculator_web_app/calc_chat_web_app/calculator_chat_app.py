@@ -242,6 +242,54 @@ st.markdown(
     }
     .failed-indicator strong { font-weight: 600; }
 
+    /* ── Sync Preview (shown while waiting for response) ── */
+    .sync-preview {
+        background: #eff6ff;
+        border-left: 3px solid var(--accent-blue);
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+        padding: 0.85rem 1.1rem;
+        margin: 0.6rem 0 0.25rem 0;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.92rem;
+        color: var(--text-primary);
+        line-height: 1.55;
+        opacity: 0.85;
+    }
+    .sync-preview .msg-label {
+        font-weight: 600;
+        color: var(--accent-blue-dark);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 0.3rem;
+    }
+    .sync-waiting {
+        background: #f0f9ff;
+        border-left: 3px solid var(--accent-blue);
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+        padding: 0.7rem 1rem;
+        margin: 0.25rem 0 0.6rem 0;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        animation: pulse-bg 1.5s ease-in-out infinite;
+    }
+    .sync-waiting .spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid #93c5fd;
+        border-top-color: var(--accent-blue);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        flex-shrink: 0;
+    }
+    .sync-waiting .waiting-text {
+        color: #1e40af;
+        font-weight: 500;
+    }
+
     /* ── Status Badges ── */
     .badge {
         display: inline-block;
@@ -1061,11 +1109,21 @@ else:
             content = user_input.strip()
             try:
                 if run_mode == "sync":
-                    # ── Sync: wait for response ─────────────────────────
-                    with st.spinner("Thinking..."):
-                        resp = api_send_message(
-                            st.session_state.chat_id, content, "sync"
-                        )
+                    # ── Sync: show preview while waiting ────────────────
+                    st.markdown(
+                        f'<div class="sync-preview">'
+                        f'<div class="msg-label">You</div>'
+                        f"{_esc(content)}"
+                        f"</div>"
+                        f'<div class="sync-waiting">'
+                        f'<div class="spinner"></div>'
+                        f'<span class="waiting-text">Agent is thinking...</span>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    resp = api_send_message(
+                        st.session_state.chat_id, content, "sync"
+                    )
                     _refresh_interactions()
                     st.rerun()
 
