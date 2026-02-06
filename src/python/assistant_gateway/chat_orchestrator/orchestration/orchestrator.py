@@ -396,7 +396,7 @@ class ConversationOrchestrator:
             return None
         
         # the user input interaction id is the interaction id of the user input interaction that triggered the task
-        user_input_interaction_id = task.payload.get("interaction_id")
+        user_input_interaction_id = task.interaction_id
         if not user_input_interaction_id:
             raise ValueError("There must be a last user input interaction id for the task")
 
