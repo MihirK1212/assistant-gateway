@@ -598,7 +598,9 @@ _ACTIVE_STATUSES = frozenset({"pending", "in_progress"})
 def _drain_ws_events() -> bool:
     """
     Drain all events from the WebSocket queue and update bg_tasks.
-    Returns True if any task reached a terminal state.
+    Returns True if any task reached a terminal state (needs interaction refresh).
+    Also updates non-terminal status changes (e.g. pending -> in_progress) so the
+    UI indicators reflect real-time state without requiring a full rerun.
     """
     eq: Optional[queue.Queue] = st.session_state.get("_ws_queue")
     if eq is None:
@@ -628,10 +630,11 @@ def _drain_ws_events() -> bool:
     return any_terminal
 
 
-def _poll_task_statuses() -> bool:
+def _poll_task_statuses_fallback() -> bool:
     """
-    HTTP-poll every active bg task. Returns True if any task reached a terminal
-    state (used as fallback when WebSocket events are missed).
+    HTTP-poll active bg tasks. Only used as a **fallback** when the WebSocket
+    listener is not connected (e.g. websockets not installed, server rejected
+    the WS connection, etc.). Never called while the WS is alive.
     """
     chat_id = st.session_state.chat_id
     if not chat_id:
@@ -864,15 +867,26 @@ _HAS_FRAGMENT = callable(getattr(st, "fragment", None))
 
 def _check_and_refresh_tasks() -> None:
     """
-    Core monitor logic: drain WS events or poll, and if anything changed
-    refresh interactions and trigger a full page rerun.
+    Core monitor logic.
+
+    Primary path: drain events that the WebSocket listener thread pushed
+    into the shared queue.  This is the normal real-time path -- no HTTP
+    requests are made.
+
+    Fallback path: if the WebSocket thread is NOT alive (library missing,
+    connection lost, etc.), fall back to HTTP-polling the task status
+    endpoint so background tasks still resolve.
     """
     if not st.session_state.bg_tasks:
         return
 
+    # Always drain whatever the WS thread has queued up
     needs_refresh = _drain_ws_events()
-    if not needs_refresh:
-        needs_refresh = _poll_task_statuses()
+
+    # Only resort to HTTP polling when the WS listener is down
+    if not needs_refresh and not _is_ws_connected():
+        needs_refresh = _poll_task_statuses_fallback()
+
     if needs_refresh:
         _refresh_interactions()
         st.rerun()
