@@ -2,7 +2,72 @@
 
 This example demonstrates a complete chat-based calculator using the Assistant Gateway.
 
-## Quick Start (Recommended)
+## TLDR Quick Start Guide
+
+Follow these steps to run the complete calculator web app example:
+
+### Prerequisites: Configure Environment Variables
+
+Before starting the services, set up your environment variables. If using Claude models, create a `.env` file or export the following variables:
+
+```bash
+export ANTHROPIC_API_KEY=your_api_key_here
+export CLAUDE_MODEL=claude-3-5-sonnet-20241022  # Default model to use
+```
+
+Or create a `.env` file in the project directory:
+
+```env
+ANTHROPIC_API_KEY=your_api_key_here
+CLAUDE_MODEL=claude-3-5-sonnet-20241022
+```
+
+### 1. Start the Calculator Backend API
+
+Navigate to the calculator API directory and start the backend service:
+
+```bash
+cd src/python/assistant_gateway/examples/calculator_web_app/calculator_api
+fastapi dev api.py --port 5000
+```
+
+### 2. Start the Celery Worker
+
+In a separate terminal, start the Celery worker for background task processing:
+
+```bash
+python -m assistant_gateway.runner \
+    --app assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.api:app \
+    --config assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.gateway_config:config \
+    --celery-only
+```
+
+### 3. Start the Gateway API
+
+In another terminal, start the FastAPI gateway server:
+
+```bash
+python -m assistant_gateway.runner \
+    --app assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.api:app \
+    --config assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.gateway_config:config \
+    --fastapi-only
+```
+
+### 4. Launch the Streamlit Frontend
+
+Finally, start the Streamlit web interface:
+
+```bash
+streamlit run calculator_chat_app.py
+```
+
+**All services should now be running:**
+- Calculator API: `http://localhost:5000`
+- Gateway API: `http://localhost:8000`
+- Streamlit App: `http://localhost:8501`
+  
+
+## Detailed Quick Start (Recommended)
 
 The simplest way to run this example is using the Gateway Runner:
 
