@@ -8,7 +8,7 @@ import abc
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from assistant_gateway.clauq_btm.events import TaskEvent
 from assistant_gateway.clauq_btm.queue_manager.serialization import (

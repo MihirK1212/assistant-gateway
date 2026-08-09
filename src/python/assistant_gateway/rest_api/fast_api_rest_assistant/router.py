@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, Response, status, WebSocket, WebSocketDisconnect
-
+from assistant_gateway.chat_orchestrator.orchestration.orchestrator import (
+    ConversationOrchestrator,
+)
+from assistant_gateway.clauq_btm.queue_manager.serialization import serialize_event
 from assistant_gateway.rest_api.schemas import (
     ChatInteractionsResponse,
     ChatResponse,
@@ -15,11 +17,7 @@ from assistant_gateway.rest_api.schemas import (
     SendMessageResponse,
     TaskResponse,
 )
-from assistant_gateway.chat_orchestrator.orchestration.orchestrator import (
-    ConversationOrchestrator,
-)
-from assistant_gateway.clauq_btm.queue_manager.serialization import serialize_event
-
+from fastapi import APIRouter, Depends, Response, WebSocket, WebSocketDisconnect, status
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +42,6 @@ async def create_chat(
     chat = await orchestrator.create_chat(
         user_id=body.user_id,
         agent_name=body.agent_name,
-        metadata=body.metadata,
-        extra_metadata=body.extra_metadata,
     )
     return CreateChatResponse(chat=chat)
 
@@ -77,7 +73,6 @@ async def send_chat_message(
         chat_id=chat_id,
         content=body.content,
         run_in_background=body.run_mode == RunMode.background,
-        message_metadata=body.message_metadata,
         user_context=body.user_context,
         backend_server_context=body.backend_server_context,
     )

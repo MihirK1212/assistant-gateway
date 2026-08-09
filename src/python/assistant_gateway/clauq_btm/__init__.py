@@ -74,18 +74,12 @@ Alternative Usage (Manual Registration):
     celery_app = clauq_btm.celery_app
 """
 
-from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
-from assistant_gateway.clauq_btm.task_manager import BTMTaskManager
 from assistant_gateway.clauq_btm.executor_registry import (
-    ExecutorRegistry,
     ExecutorConfig,
     ExecutorFunc,
+    ExecutorRegistry,
     PostExecutionFunc,
-)
-from assistant_gateway.clauq_btm.queue_manager import (
-    QueueInfo,
-    CeleryQueueManager,
 )
 from assistant_gateway.clauq_btm.instance import (
     BackgroundTasksUnavailableError,
@@ -94,6 +88,12 @@ from assistant_gateway.clauq_btm.instance import (
     ClauqBTMSetupError,
     SetupState,
 )
+from assistant_gateway.clauq_btm.queue_manager import (
+    CeleryQueueManager,
+    QueueInfo,
+)
+from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
+from assistant_gateway.clauq_btm.task_manager import BTMTaskManager
 
 __all__ = [
     # Core schemas

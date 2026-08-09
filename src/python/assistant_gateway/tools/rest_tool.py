@@ -2,20 +2,18 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Type
 from urllib.parse import urljoin
+
 import httpx
-from pydantic import BaseModel, Field, ValidationError, create_model
-
-
 from assistant_gateway.errors import ToolExecutionError
 from assistant_gateway.schemas import ToolResult
-from assistant_gateway.tools.base import Tool, ToolContext, ToolConfig
+from assistant_gateway.tools.base import Tool, ToolConfig, ToolContext
+from pydantic import BaseModel, Field, ValidationError, create_model
 
 
 class DefaultRESTQueryAndPayloadModel(BaseModel):
     """
     Default model for the query and payload parameters to be passed inside the input of the ToolContext during runtime for a REST tool.
     """
-
     pass
 
 

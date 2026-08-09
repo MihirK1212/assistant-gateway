@@ -18,39 +18,39 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Dict,
     List,
     Optional,
-    TYPE_CHECKING,
 )
 
-from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
 from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
+from assistant_gateway.clauq_btm.queue_manager.celery_task import (
+    create_celery_task,
+)
 from assistant_gateway.clauq_btm.queue_manager.constants import (
-    TASK_KEY_PREFIX,
+    ALL_EVENTS_CHANNEL,
+    CELERY_TASK_PREFIX,
+    COMPLETED_TASK_TTL,
+    EVENTS_CHANNEL_PREFIX,
     QUEUE_KEY_PREFIX,
     QUEUE_META_PREFIX,
-    CELERY_TASK_PREFIX,
-    EVENTS_CHANNEL_PREFIX,
-    ALL_EVENTS_CHANNEL,
-    COMPLETED_TASK_TTL,
+    TASK_KEY_PREFIX,
 )
 from assistant_gateway.clauq_btm.queue_manager.serialization import (
-    serialize_task,
-    serialize_event,
     deserialize_task,
+    serialize_event,
     serialize_for_redis_hset,
+    serialize_task,
 )
 from assistant_gateway.clauq_btm.queue_manager.subscription import (
     EventSubscription,
     RedisEventSubscription,
 )
-from assistant_gateway.clauq_btm.queue_manager.celery_task import (
-    create_celery_task,
-)
+from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 
 if TYPE_CHECKING:
     from celery import Celery

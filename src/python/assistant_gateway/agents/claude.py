@@ -2,38 +2,33 @@ from __future__ import annotations
 
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from claude_agent_sdk import McpSdkServerConfig
-from claude_agent_sdk import ClaudeAgentOptions
-from claude_agent_sdk import ClaudeSDKClient
 
 from assistant_gateway.agents.base import Agent
-from assistant_gateway.tools.base import Tool, ToolContext
-from assistant_gateway.tools.registry import ToolRegistry
 from assistant_gateway.schemas import (
     AgentInteraction,
     AgentOutput,
-    Role,
     AgentStep,
+    Role,
     ToolCall,
     ToolResult,
     UserInput,
 )
+from assistant_gateway.tools.base import Tool, ToolContext
+from assistant_gateway.tools.registry import ToolRegistry
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, McpSdkServerConfig
 
 
 class ClaudeBaseAgent(Agent):
     """
-    Adapter that prepares tools from ``ToolRegistry`` for the ClaudeAgent SDK.
+    Base class that can be used to create a Claude agent. 
 
-    The actual conversation loop still needs to be implemented, but the
-    infrastructure for translating registry entries into ``@tool``-decorated
-    callables lives here.
+    It provides the utility for creating an MCP config from a tool registry, and wrapping tools for the Claude SDK.
+    The actual agent configuration (mcp server options) needs to be implemented by the subclass.
     """
+
     def get_mcp_server_options(self) -> ClaudeAgentOptions:
         """
-        Get the MCP server options for the Claude agent.
-        These options will be used to instantiate the ClaudeSDKClient.
-        You can make use of the get_mcp_server_config to get the MCP server config,
-        and then combine multiple server configs into a single options object.
+        Combine multiple server configs into a single options object.
         """
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -45,17 +40,6 @@ class ClaudeBaseAgent(Agent):
         tool_registry: ToolRegistry,
         agent_level_input_overrides: Optional[Dict[str, Any]] = None,
     ) -> Tuple[McpSdkServerConfig, List[Callable]]:
-        """
-        Translate the registry into Claude SDK ``@tool`` callables and register
-        them against an MCP server instance.
-
-        Args:
-                tool_registry: The tool registry to use.
-                agent_level_input_overrides: The agent level input overrides to use.
-
-        Returns:
-                A tuple containing the MCP server and the tool functions.
-        """
         from claude_agent_sdk import create_sdk_mcp_server
 
         tool_functions = [
@@ -72,10 +56,20 @@ class ClaudeBaseAgent(Agent):
     async def run(self, interactions: List[AgentInteraction]) -> AgentOutput:
         mcp_server_options = self.get_mcp_server_options()
 
-        # Convert messages to Claude SDK format
-        # Extract content using helper method that handles different AgentInteraction subclasses
+        sorted_interactions = sorted(
+            interactions,
+            key=lambda m: (m.sequence_id is None, m.sequence_id, m.created_at),
+        )
+
+        last_user_input = next(
+            (m for m in reversed(sorted_interactions) if isinstance(m, UserInput)),
+            None,
+        )
+        if not last_user_input:
+            raise ValueError("interactions must contain at least one UserInput")
+
         claude_messages = []
-        for msg in interactions:
+        for msg in sorted_interactions:
             if msg.role not in (Role.user, Role.assistant):
                 continue
             content_text = self._get_interaction_content(msg)
@@ -85,50 +79,68 @@ class ClaudeBaseAgent(Agent):
                 {"role": msg.role.value, "content": self._stringify(content_text)}
             )
 
-        prompt = claude_messages[-1]["content"] if claude_messages else ""
+        last_user_message = next(
+            (m for m in reversed(claude_messages) if m["role"] == Role.user.value),
+            None,
+        )
+        prompt = last_user_message["content"] if last_user_message else ""
 
-        # Call Claude with the configured MCP server options using ClaudeSDKClient
-        # Collect all messages from the stream for proper parsing
         all_messages: List[Any] = []
         async with ClaudeSDKClient(options=mcp_server_options) as client:
             await client.query(prompt)
             async for message in client.receive_response():
                 all_messages.append(message)
-
-        # Parse all messages into message, steps and result text in order to return an AgentOutput
+        
         assistant_messages: List[str] = []
         steps: List[AgentStep] = []
         result_text: Optional[str] = None
 
-        # Track tool calls by ID for associating results with their calls
         tool_call_names: Dict[str, str] = {}
 
+        """
+        The messages received can be of the following types: 
+
+        1. assistant message: 
+            - has content list with content blocks
+            - content blocks can be: 
+                - text block => has 'text' attribute
+                - thinking block => has 'thinking' and 'signature' attributes
+                - tool use block => has 'id', 'name', 'input' attributes
+                - tool result block => has 'tool_use_id', 'content', 'is_error' attributes
+
+        2. result message:
+            - has 'result', 'is_error', 'total_cost_usd', 'duration_ms', 'num_turns' attributes
+
+        3. system message:
+            - has 'subtype' and 'data' attributes
+
+        4. user message:
+            - has 'content' attribute
+        """
+
         for message in all_messages:
-            # Handle AssistantMessage - has content list with ContentBlocks
             if self._is_assistant_message(message):
                 content_blocks = self._get_value(message, "content", [])
                 if not isinstance(content_blocks, list):
                     continue
+
                 step_thought: Optional[str] = None
                 step_tool_calls: List[ToolCall] = []
                 step_tool_results: List[ToolResult] = []
                 step_messages: List[str] = []
 
                 for content_block in content_blocks:
-                    # TextBlock - has 'text' attribute
                     if self._is_text_block(content_block):
                         text = self._get_value(content_block, "text")
                         if text is not None:
                             text_str = self._stringify(text)
                             step_messages.append(text_str)
 
-                    # ThinkingBlock - has 'thinking' and 'signature' attributes
                     elif self._is_thinking_block(content_block):
                         thinking = self._get_value(content_block, "thinking")
                         if thinking is not None:
                             step_thought = self._stringify(thinking)
 
-                    # ToolUseBlock - has 'id', 'name', 'input' attributes
                     elif self._is_tool_use_block(content_block):
                         call_id = self._stringify(self._get_value(content_block, "id"))
                         if not call_id:
@@ -150,10 +162,8 @@ class ClaudeBaseAgent(Agent):
                             input=input_payload,
                         )
                         step_tool_calls.append(tool_call)
-                        # Track tool name for later result association
                         tool_call_names[call_id] = tool_name
 
-                    # ToolResultBlock - has 'tool_use_id', 'content', 'is_error' attributes
                     elif self._is_tool_result_block(content_block):
                         tool_use_id = self._stringify(
                             self._get_value(content_block, "tool_use_id")
@@ -175,12 +185,9 @@ class ClaudeBaseAgent(Agent):
                         )
                         step_tool_results.append(tool_result)
 
-                # Create assistant message if we have text
-                # AgentOutput.messages is List[str], so append the text directly
                 if step_messages:
                     assistant_messages.append("\n".join(step_messages))
 
-                # Create an AgentStep if we have thought, tool calls, or tool results
                 if step_thought or step_tool_calls or step_tool_results:
                     step = AgentStep(
                         thought=step_thought,
@@ -189,24 +196,17 @@ class ClaudeBaseAgent(Agent):
                     )
                     steps.append(step)
 
-            # Handle ResultMessage - has 'result', 'is_error', 'total_cost_usd', etc.
             elif self._is_result_message(message):
                 result_value = self._get_value(message, "result")
                 if result_value:
                     result_text = self._stringify(result_value)
 
-            # Handle SystemMessage - has 'subtype' and 'data' attributes
             elif self._is_system_message(message):
-                # System messages are metadata, not included in response messages
                 pass
 
-            # Handle UserMessage - has 'content' attribute (str or list)
             elif self._is_user_message(message):
-                # User messages from the stream are typically echoes, skip them
                 pass
 
-        # If we have a result from ResultMessage, use that as final_text
-        # AgentOutput.messages is List[str], so compare and append strings directly
         if result_text:
             final_text = result_text
             if not assistant_messages or assistant_messages[-1] != result_text:
@@ -219,44 +219,36 @@ class ClaudeBaseAgent(Agent):
             messages=assistant_messages,
             steps=steps,
             final_text=final_text,
+            user_input_interaction_id=last_user_input.id,
         )
 
     @classmethod
     def _get_interaction_content(cls, interaction: AgentInteraction) -> str:
         """
-        Extract content from an AgentInteraction.
+        Extract the string content from an AgentInteraction. 
+        An interaction can either be a UserInput or an AgentOutput. 
 
-        Handles:
-        - UserInput: has .content attribute
-        - AgentInteraction: has metadata['content']
-        - Other AgentInteraction subclasses: check for content in metadata or direct attribute
+        UserInput => use the content attribute to get the string content 
+
+        Else:
+            - check if the interaction has a messages attribute. if yes, join the messages and return the joined string 
+            - check if the interaction has a final_text attribute. if yes, return the final_text
         """
-        # Check if it's a UserInput with direct content attribute
         if isinstance(interaction, UserInput):
             return cls._stringify(interaction.content)
 
-        # Check for messages on an AgentOutput-like interaction
         if hasattr(interaction, "messages"):
             msgs = getattr(interaction, "messages")
             if isinstance(msgs, list) and msgs:
-                # Join text parts to form a single content string
                 joined = "\n".join(cls._stringify(m) for m in msgs if m is not None)
                 if joined:
                     return joined
 
-        # Check for final_text on an AgentOutput-like interaction
         if hasattr(interaction, "final_text"):
             final_text = getattr(interaction, "final_text")
             if final_text:
                 return cls._stringify(final_text)
 
-        # Check for content in metadata (AgentInteraction pattern)
-        if hasattr(interaction, "metadata") and isinstance(interaction.metadata, dict):
-            content = interaction.metadata.get("content")
-            if content is not None:
-                return cls._stringify(content)
-
-        # Fallback: check for direct content attribute (for flexibility)
         if hasattr(interaction, "content"):
             return cls._stringify(interaction.content)
 
@@ -283,14 +275,12 @@ class ClaudeBaseAgent(Agent):
 
     @staticmethod
     def _is_assistant_message(message: Any) -> bool:
-        """Check if message is an AssistantMessage (has content list and model)."""
         return ClaudeBaseAgent._has_attr_or_key(message, "content") and isinstance(
             ClaudeBaseAgent._get_value(message, "content"), list
         )
 
     @staticmethod
     def _is_result_message(message: Any) -> bool:
-        """Check if message is a ResultMessage (has subtype, duration_ms, is_error, etc.)."""
         return (
             ClaudeBaseAgent._has_attr_or_key(message, "subtype")
             and ClaudeBaseAgent._has_attr_or_key(message, "duration_ms")
@@ -300,7 +290,6 @@ class ClaudeBaseAgent(Agent):
 
     @staticmethod
     def _is_system_message(message: Any) -> bool:
-        """Check if message is a SystemMessage (has subtype and data, but not ResultMessage fields)."""
         return (
             ClaudeBaseAgent._has_attr_or_key(message, "subtype")
             and ClaudeBaseAgent._has_attr_or_key(message, "data")
@@ -309,7 +298,6 @@ class ClaudeBaseAgent(Agent):
 
     @staticmethod
     def _is_user_message(message: Any) -> bool:
-        """Check if message is a UserMessage (has content but not model or subtype)."""
         return (
             ClaudeBaseAgent._has_attr_or_key(message, "content")
             and not ClaudeBaseAgent._has_attr_or_key(message, "model")
@@ -318,21 +306,18 @@ class ClaudeBaseAgent(Agent):
 
     @staticmethod
     def _is_text_block(block: Any) -> bool:
-        """Check if content block is a TextBlock."""
         return ClaudeBaseAgent._has_attr_or_key(
             block, "text"
         ) and not ClaudeBaseAgent._has_attr_or_key(block, "thinking")
 
     @staticmethod
     def _is_thinking_block(block: Any) -> bool:
-        """Check if content block is a ThinkingBlock."""
         return ClaudeBaseAgent._has_attr_or_key(
             block, "thinking"
         ) and ClaudeBaseAgent._has_attr_or_key(block, "signature")
 
     @staticmethod
     def _is_tool_use_block(block: Any) -> bool:
-        """Check if content block is a ToolUseBlock."""
         return (
             ClaudeBaseAgent._has_attr_or_key(block, "id")
             and ClaudeBaseAgent._has_attr_or_key(block, "name")
@@ -342,7 +327,6 @@ class ClaudeBaseAgent(Agent):
 
     @staticmethod
     def _is_tool_result_block(block: Any) -> bool:
-        """Check if content block is a ToolResultBlock."""
         return ClaudeBaseAgent._has_attr_or_key(block, "tool_use_id")
 
     @classmethod
@@ -389,31 +373,14 @@ class ClaudeBaseAgent(Agent):
 
     @classmethod
     def _build_input_schema(cls, tool: Tool) -> Dict[str, Any]:
-        """Build a proper JSON Schema from the tool's input model."""
         model = tool.config.input_model
         if not model:
             return {"type": "object", "properties": {}}
 
-        # Use Pydantic's built-in JSON schema generation
         json_schema = model.model_json_schema()
 
-        # Filter out fields we don't want to expose to the tool input
-        excluded_fields = {}
-        if "properties" in json_schema:
-            json_schema["properties"] = {
-                k: v
-                for k, v in json_schema["properties"].items()
-                if k not in excluded_fields
-            }
-        if "required" in json_schema:
-            json_schema["required"] = [
-                r for r in json_schema["required"] if r not in excluded_fields
-            ]
-
-        # Resolve $defs references inline for simpler schema
         json_schema = cls._resolve_schema_refs(json_schema)
 
-        # Remove $defs after resolving
         if "$defs" in json_schema:
             del json_schema["$defs"]
 
@@ -423,23 +390,50 @@ class ClaudeBaseAgent(Agent):
     def _resolve_schema_refs(
         cls, schema: Dict[str, Any], defs: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Recursively resolve $ref references in JSON Schema."""
+        """
+        Example:
+            # Input (as produced by Pydantic):
+            {
+                "type": "object",
+                "properties": {
+                    "address": {"$ref": "#/$defs/Address"}
+                },
+                "$defs": {
+                    "Address": {
+                        "type": "object",
+                        "properties": {
+                            "street": {"type": "string"},
+                            "city":   {"type": "string"}
+                        }
+                    }
+                }
+            }
+
+            # Output (after _resolve_schema_refs + deleting "$defs"):
+            {
+                "type": "object",
+                "properties": {
+                    "address": {
+                        "type": "object",
+                        "properties": {
+                            "street": {"type": "string"},
+                            "city":   {"type": "string"}
+                        }
+                    }
+                }
+            }
+        """
         if defs is None:
             defs = schema.get("$defs", {})
 
         if isinstance(schema, dict):
-            # Handle $ref
             if "$ref" in schema:
                 ref_path = schema["$ref"]
-                # Extract the definition name from "#/$defs/DefinitionName"
                 if ref_path.startswith("#/$defs/"):
                     def_name = ref_path.split("/")[-1]
                     if def_name in defs:
-                        # Return a copy of the resolved definition (recursively resolve it too)
                         return cls._resolve_schema_refs(defs[def_name].copy(), defs)
                 return schema
-
-            # Recursively resolve all dict values
             return {k: cls._resolve_schema_refs(v, defs) for k, v in schema.items()}
         elif isinstance(schema, list):
             return [cls._resolve_schema_refs(item, defs) for item in schema]

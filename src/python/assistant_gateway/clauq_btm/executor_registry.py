@@ -11,7 +11,7 @@ Celery workers) to ensure all processes have access to the same executors.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm.schemas import ClauqBTMTask

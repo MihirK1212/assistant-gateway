@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from enum import Enum
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -14,28 +14,25 @@ class Role(str, Enum):
 
 
 class ToolCall(BaseModel):
-    """A tool invocation request from the assistant."""
-
     id: str
     name: str
     input: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolResult(BaseModel):
-    """Result of a tool execution.
-
+    """
     Used in two contexts:
     1. Tool implementations return this with name + output
     2. Agent response parsing populates tool_call_id to link back to ToolCall
     """
 
     output: Any
-    name: Optional[str] = None  # Tool name (set by tool implementations)
+    name: Optional[str] = None  
     tool_call_id: Optional[str] = (
-        None  # Links back to ToolCall.id (set when parsing agent response)
+        None 
     )
-    is_error: bool = False  # Whether the tool execution failed
-    raw_response: Any = None  # Optional: preserve original response for debugging
+    is_error: bool = False  
+    raw_response: Any = None  
 
 
 class AgentStep(BaseModel):
@@ -45,12 +42,14 @@ class AgentStep(BaseModel):
     tool_calls: List[ToolCall] = Field(default_factory=list)
     tool_results: List[ToolResult] = Field(
         default_factory=list
-    )  # Results for this step's tool calls
+    ) 
 
 
 class AgentInteraction(BaseModel):
-    """An interaction in the conversation."""
-
+    """
+    Base class for all agent interactions.
+    Can be either a user input or an agent output.
+    """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     sequence_id: Optional[int] = Field(default=None, description="The sequence id of the interaction in the conversation")
@@ -58,10 +57,7 @@ class AgentInteraction(BaseModel):
 
 
 class UserInput(AgentInteraction):
-    """A message from the user."""
-
     content: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -70,13 +66,10 @@ class UserInput(AgentInteraction):
 
 
 class AgentOutput(AgentInteraction):
-    """An output from the assistant."""
-
     messages: List[str]
     steps: List[AgentStep] = Field(default_factory=list)
     final_text: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    user_input_interaction_id: Optional[str] = None
+    user_input_interaction_id: str
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -85,8 +78,6 @@ class AgentOutput(AgentInteraction):
 
 
 class TaskStatus(str, Enum):
-    """Status of an agent task."""
-
     pending = "pending"
     in_progress = "in_progress"
     completed = "completed"

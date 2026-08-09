@@ -392,9 +392,9 @@ This single call:
 
 #### Request / Response Models
 
-- **`SendMessageRequest`** -- `content`, `run_mode` (`sync` | `background`), `message_metadata`, `user_context`, `backend_server_context`
+- **`SendMessageRequest`** -- `content`, `run_mode` (`sync` | `background`), `user_context`, `backend_server_context`
 - **`SendMessageResponse`** -- `chat`, `assistant_response` (if sync), `task` (if background)
-- **`CreateChatRequest`** -- `user_id`, `agent_name`, `metadata`, `extra_metadata`
+- **`CreateChatRequest`** -- `user_id`, `agent_name`
 - **`TaskResponse`** -- `task` (with `status`, `result`, `error`)
 
 ---

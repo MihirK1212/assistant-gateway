@@ -5,3 +5,4 @@ __pycache__/
 prompts/
 .env*
 node_modules/
+.vscode/

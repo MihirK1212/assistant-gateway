@@ -13,10 +13,9 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
 @dataclass
 class RunAgentExecutorPayload:
     """
-    Strongly-typed payload for the agent executor.
-
-    This class defines the exact structure of data passed to the executor.
-    It handles serialization (for Celery) and deserialization (in workers).
+    Handles the serialization and deserialization of the payload for the agent executor 
+    While registering the executor, the payload needs to be serialzied 
+    While executing the executor, the payload needs to be deserialized
     """
 
     chat: ChatMetadata

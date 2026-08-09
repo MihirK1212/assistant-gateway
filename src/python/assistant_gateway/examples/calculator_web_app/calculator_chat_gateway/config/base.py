@@ -1,5 +1,6 @@
 import os
 
+import dotenv
 from assistant_gateway.chat_orchestrator.chat.store import FileSystemChatStore
 from assistant_gateway.chat_orchestrator.core.config import (
     AgentConfig,
@@ -10,8 +11,6 @@ from assistant_gateway.clauq_btm import ClauqBTM
 from assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.config.agent import (
     build_calculator_agent,
 )
-
-import dotenv
 
 dotenv.load_dotenv()
 

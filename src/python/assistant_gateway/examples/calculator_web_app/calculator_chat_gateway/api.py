@@ -3,26 +3,20 @@ from __future__ import annotations
 import os
 import sys
 
+from assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.gateway_config import (
+    config,
+)
+from assistant_gateway.rest_api.fast_api_rest_assistant.enrich import (
+    enrich_app_with_assistant_router,
+)
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(os.path.dirname(CURRENT_DIR)))
 sys.path.append(os.path.dirname(CURRENT_DIR))
-sys.path.append(
-    os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
-)  # repo root
-sys.path.append(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR))))
-)  # repo root
-
-
-from fastapi import FastAPI  # noqa: E402
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-
-from assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.gateway_config import (  # noqa: E402
-    config,
-)
-from assistant_gateway.rest_api.fast_api_rest_assistant.enrich import (  # noqa: E402
-    enrich_app_with_assistant_router,
-)
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))))
 
 
 def create_app() -> FastAPI:

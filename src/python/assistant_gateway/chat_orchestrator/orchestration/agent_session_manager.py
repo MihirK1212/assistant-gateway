@@ -3,23 +3,15 @@ from __future__ import annotations
 from typing import Dict, Mapping, Optional
 
 from assistant_gateway.agents.base import Agent
-
 from assistant_gateway.chat_orchestrator.core.config import AgentConfig
 from assistant_gateway.chat_orchestrator.core.schemas import (
     BackendServerContext,
-    UserContext,
-)
-from assistant_gateway.chat_orchestrator.core.schemas import (
     GatewayDefaultFallbackConfig,
+    UserContext,
 )
 
 
 class AgentSessionManager:
-    """
-    Maintains long-lived agent instances per chat so the same MCP session
-    (tools, auth, cached state) can be reused across API calls.
-    """
-
     def __init__(
         self,
         *,

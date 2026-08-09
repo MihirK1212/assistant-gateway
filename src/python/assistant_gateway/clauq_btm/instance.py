@@ -67,21 +67,21 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, TypedDict
 
 from assistant_gateway.clauq_btm.executor_registry import (
-    ExecutorRegistry,
     ExecutorConfig,
+    ExecutorRegistry,
 )
 from assistant_gateway.clauq_btm.task_manager import (
-    BTMTaskManager,
     BackgroundTasksUnavailableError,
+    BTMTaskManager,
 )
 
 if TYPE_CHECKING:
-    from celery import Celery
     from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
     from assistant_gateway.clauq_btm.schemas import ClauqBTMTask
+    from celery import Celery
 
 
 logger = logging.getLogger(__name__)

@@ -7,6 +7,7 @@ Usage:
 """
 
 import sys
+
 from assistant_gateway.runner.cli import main
 
 if __name__ == "__main__":

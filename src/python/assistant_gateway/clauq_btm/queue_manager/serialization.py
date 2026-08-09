@@ -8,8 +8,8 @@ import json
 from datetime import datetime
 from typing import Any, Dict
 
-from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
+from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 
 
 def serialize_for_redis_hset(data: Dict[str, Any]) -> Dict[str, str]:

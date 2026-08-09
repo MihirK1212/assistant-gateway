@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Dict, Optional
 from uuid import uuid4
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus

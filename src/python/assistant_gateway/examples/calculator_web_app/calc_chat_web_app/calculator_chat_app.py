@@ -446,8 +446,6 @@ def api_create_chat(user_id: str) -> dict:
     payload = {
         "user_id": user_id,
         "agent_name": "calculator",
-        "metadata": {},
-        "extra_metadata": {},
     }
     resp = requests.post(url, json=payload, timeout=(5, 15))
     resp.raise_for_status()
@@ -476,7 +474,6 @@ def api_send_message(chat_id: str, content: str, run_mode: str = "sync") -> dict
     payload = {
         "content": content,
         "run_mode": run_mode,
-        "message_metadata": {},
         "user_context": None,
         "backend_server_context": None,
     }

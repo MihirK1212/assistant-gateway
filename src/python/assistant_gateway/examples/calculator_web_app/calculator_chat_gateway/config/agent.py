@@ -1,24 +1,16 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from claude_agent_sdk import ClaudeAgentOptions
-from pydantic import BaseModel, Field
-
-
+import dotenv
 from assistant_gateway.agents.claude import ClaudeBaseAgent
-from assistant_gateway.chat_orchestrator.core.config import (
-    GatewayDefaultFallbackConfig,
-)
+from assistant_gateway.chat_orchestrator.core.config import GatewayDefaultFallbackConfig
 from assistant_gateway.chat_orchestrator.core.schemas import (
     BackendServerContext,
     UserContext,
 )
 from assistant_gateway.tools.registry import ToolRegistry
 from assistant_gateway.tools.rest_tool import RESTTool
-from typing import Any
-
-
-import os 
-import dotenv 
+from claude_agent_sdk import ClaudeAgentOptions
+from pydantic import BaseModel, Field
 
 dotenv.load_dotenv()
 
@@ -42,9 +34,7 @@ class ArithmeticResultOutputModel(BaseModel):
 
 
 class CustomSeriesOutputModel(BaseModel):
-    series: List[float] = Field(
-        description="The generated custom mihir series"
-    )
+    series: List[float] = Field(description="The generated custom mihir series")
 
 
 class LogOutputModel(BaseModel):
@@ -57,7 +47,7 @@ class AddRESTTool(RESTTool):
     def __init__(self) -> None:
         super().__init__(
             name="add",
-            description=("Add two numbers together. " "Endpoint: GET /add?a={a}&b={b}"),
+            description=("Add two numbers together. Endpoint: GET /add?a={a}&b={b}"),
             query_params_model=TwoNumbersQueryParamsModel,
             output_model=ArithmeticResultOutputModel,
         )
@@ -67,9 +57,7 @@ class MultiplyRESTTool(RESTTool):
     def __init__(self) -> None:
         super().__init__(
             name="multiply",
-            description=(
-                "Multiply two numbers together. " "Endpoint: GET /multiply?a={a}&b={b}"
-            ),
+            description=("Multiply two numbers together. Endpoint: GET /multiply?a={a}&b={b}"),
             query_params_model=TwoNumbersQueryParamsModel,
             output_model=ArithmeticResultOutputModel,
         )
@@ -106,10 +94,7 @@ class MihirCustomSeriesRESTTool(RESTTool):
     def __init__(self) -> None:
         super().__init__(
             name="mihir_custom_series",
-            description=(
-                "Generate Mihir's custom series from a number "
-                "Endpoint: GET /mihir_custom_series?a={a}"
-            ),
+            description=("Generate Mihir's custom series from a number Endpoint: GET /mihir_custom_series?a={a}"),
             query_params_model=SingleNumberQueryParamsModel,
             output_model=CustomSeriesOutputModel,
         )
@@ -196,10 +181,7 @@ def build_calculator_agent(
     """
     Create a calculator agent using dynamic inputs supplied by the orchestrator.
     """
-
-    backend_url = "http://127.0.0.1:5000"
-
-    agent_level_input_overrides = {"backend_url": backend_url}
+    agent_level_input_overrides = {"backend_url": default_fallback_config.fallback_backend_url}
 
     return DynamicClaudeCalculatorAgent(
         model="claude-sonnet-4-5-20250929",

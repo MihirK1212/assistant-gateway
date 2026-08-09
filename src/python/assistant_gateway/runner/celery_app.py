@@ -41,10 +41,10 @@ if _cwd not in sys.path:
     sys.path.insert(0, _cwd)
 
 # Import loader here to avoid circular imports
-from assistant_gateway.runner.loader import load_config  # noqa: E402
 from assistant_gateway.chat_orchestrator.orchestration.orchestrator import (  # noqa: E402
     ConversationOrchestrator,
 )
+from assistant_gateway.runner.loader import load_config  # noqa: E402
 
 # Load the config
 config = load_config(_config_path)

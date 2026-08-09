@@ -15,7 +15,7 @@ Or with module paths:
         --app assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.api:app
 """
 
-from assistant_gateway.runner.loader import load_config, load_attribute
 from assistant_gateway.runner.cli import main as run_cli
+from assistant_gateway.runner.loader import load_attribute, load_config
 
 __all__ = ["load_config", "load_attribute", "run_cli"]

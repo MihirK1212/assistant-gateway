@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Mapping, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Dict, Mapping, Optional
 
 from assistant_gateway.agents.base import Agent
-
+from assistant_gateway.chat_orchestrator.chat.store import ChatStore, InMemoryChatStore
 from assistant_gateway.chat_orchestrator.core.schemas import (
-    UserContext,
     BackendServerContext,
     GatewayDefaultFallbackConfig,
+    UserContext,
 )
-from assistant_gateway.chat_orchestrator.chat.store import ChatStore, InMemoryChatStore
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm import ClauqBTM
@@ -18,15 +17,6 @@ if TYPE_CHECKING:
 
 @dataclass
 class AgentConfig:
-    """
-    Declarative configuration for a single agent.
-
-    `builder` is responsible for constructing the Agent. It will be called with:
-    - user_context: Optional[UserContext]
-    - backend_server_context: Optional[BackendServerContext]
-    - default_fallback_config: Optional[GatewayDefaultFallbackConfig]
-    """
-
     name: str
     builder: Callable[
         [
@@ -49,10 +39,6 @@ class GatewayConfig:
     - chat_store: can be overridden; defaults to in-memory.
     - clauq_btm: ClauqBTM instance for background task management.
                  Required for background task execution.
-
-    The clauq_btm instance provides access to the queue manager and task manager.
-    Executors will be registered in the clauq_btm.executor_registry by the
-    ConversationOrchestrator at initialization time.
     """
 
     agent_configs: Mapping[str, AgentConfig]
@@ -64,12 +50,6 @@ class GatewayConfig:
         return self.chat_store or InMemoryChatStore()
 
     def get_clauq_btm(self) -> "ClauqBTM":
-        """
-        Return the ClauqBTM instance.
-
-        Raises:
-            ValueError: If clauq_btm is not configured.
-        """
         if self.clauq_btm is None:
             raise ValueError(
                 "clauq_btm is not configured. "
