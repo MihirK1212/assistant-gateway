@@ -1,13 +1,3 @@
-"""
-Celery-based distributed queue manager implementation.
-
-IMPORTANT: For distributed execution to work correctly:
-1. Create an ExecutorRegistry and register all executors at module level
-2. Pass the same registry to CeleryQueueManager
-3. Both API servers and Celery workers must import the same module
-4. This ensures all processes have access to the same executors
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -56,19 +46,8 @@ if TYPE_CHECKING:
     from celery import Celery
     from redis.asyncio import Redis
 
-
-logger = logging.getLogger(__name__)
-
-
-# -----------------------------------------------------------------------------
-# Queue Info
-# -----------------------------------------------------------------------------
-
-
 @dataclass
 class QueueInfo:
-    """Information about a task queue."""
-
     queue_id: str
     pending_count: int
     current_task_id: Optional[str] = None
@@ -80,50 +59,9 @@ class CeleryQueueManager:
     """
     Distributed task queue manager using Celery and Redis.
 
-    Features:
-    - Distributed task execution via Celery workers
-    - Persistent task state in Redis
-    - FIFO ordering per queue using Redis sorted sets
-    - Real-time event subscription via Redis pub/sub
-    - Task interruption via Celery revoke
-
     IMPORTANT: Executors must be registered in the executor_registry before
     tasks are enqueued. Both API servers and workers must have access to the
     same registered executors.
-
-    Setup:
-        1. Create an ExecutorRegistry and register executors
-        2. Create a Celery app
-        3. Create CeleryQueueManager with the registry
-        4. Both API servers and workers must import the same module
-
-    Example:
-        # In shared_setup.py (imported by both API and workers)
-        from celery import Celery
-        from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
-        from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
-
-        # Create executor registry and register executors
-        executor_registry = ExecutorRegistry()
-
-        @executor_registry.register("process_data")
-        async def process_data(task: ClauqBTMTask) -> Any:
-            return {"processed": task.payload}
-
-        # Create Celery app and queue manager
-        celery_app = Celery('tasks', broker='redis://localhost:6379/0')
-        queue_manager = CeleryQueueManager(
-            celery_app=celery_app,
-            executor_registry=executor_registry,
-            redis_url='redis://localhost:6379/0',
-        )
-
-        # Run workers with: celery -A shared_setup worker
-
-    Args:
-        celery_app: Configured Celery application
-        executor_registry: Registry containing executors for task processing
-        redis_url: Redis connection URL
     """
 
     def __init__(
@@ -132,120 +70,30 @@ class CeleryQueueManager:
         executor_registry: ExecutorRegistry,
         redis_url: str,
     ) -> None:
-        """
-        Initialize the Celery queue manager.
-
-        The Celery task is registered at init time. Executors can be registered
-        in the executor_registry after init but before tasks are processed.
-
-        Args:
-            celery_app: Configured Celery application
-            executor_registry: Registry containing executors for task processing
-            redis_url: Redis connection URL
-        """
         self._celery_app = celery_app
         self._redis_url = redis_url
         self._executor_registry = executor_registry
 
-        # Register Celery task at init time (critical for distributed execution)
-        # This ensures the task is available when workers import this module
-        # Executors can still be registered later - the registry is captured by reference
+        # celery task that executes a given "executor_name" from the executor_registry
         self._celery_task = create_celery_task(celery_app, self._executor_registry)
 
-        # Redis async client (initialized on start)
         self._redis: Optional["Redis"] = None
-
-        # State
         self._is_running = False
-
-        # Lock for async operations
         self._lock = asyncio.Lock()
-
-    # -------------------------------------------------------------------------
-    # Properties
-    # -------------------------------------------------------------------------
 
     @property
     def celery_app(self) -> "Celery":
-        """Return the Celery application instance."""
         return self._celery_app
 
     @property
     def executor_registry(self) -> ExecutorRegistry:
-        """Return the executor registry."""
         return self._executor_registry
-
-    # -------------------------------------------------------------------------
-    # Lifecycle
-    # -------------------------------------------------------------------------
-
-    async def start(self) -> None:
-        """Start the queue manager."""
-        if self._is_running:
-            return
-
-        try:
-            import redis.asyncio as aioredis
-        except ImportError:
-            raise ImportError(
-                "redis[async] is required for CeleryQueueManager. "
-                "Install it with: pip install redis[async]"
-            )
-
-        # Initialize Redis async client
-        self._redis = aioredis.from_url(
-            self._redis_url,
-            encoding="utf-8",
-            decode_responses=True,
-        )
-
-        # Test connection
-        await self._redis.ping()
-
-        self._is_running = True
-        logger.info("CeleryQueueManager started")
-
-    async def stop(self) -> None:
-        """Stop the queue manager gracefully."""
-        if not self._is_running:
-            return
-
-        self._is_running = False
-
-        # Close Redis connection
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
-
-        logger.info("CeleryQueueManager stopped")
 
     @property
     def is_running(self) -> bool:
-        """Returns True if the queue manager is running."""
         return self._is_running
-
-    async def __aenter__(self) -> "CeleryQueueManager":
-        """Start the queue manager when entering context."""
-        await self.start()
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Stop the queue manager when exiting context."""
-        await self.stop()
-
-    def _ensure_running(self) -> None:
-        """Raise if not running."""
-        if not self._is_running:
-            raise RuntimeError("Queue manager is not running. Call start() first.")
-        if self._redis is None:
-            raise RuntimeError("Redis client not initialized")
-
-    # -------------------------------------------------------------------------
-    # Queue Management
-    # -------------------------------------------------------------------------
-
+   
     async def create_queue(self, queue_id: str) -> QueueInfo:
-        """Create a new queue on demand."""
         self._ensure_running()
         assert self._redis is not None
 
@@ -416,8 +264,6 @@ class CeleryQueueManager:
             await self._redis.publish(
                 events_channel, json.dumps(serialize_event(event))
             )
-
-        logger.debug(f"Task {task.id} enqueued to {queue_id}")
 
     async def get(self, queue_id: str, task_id: str) -> Optional[ClauqBTMTask]:
         """Get a task by ID."""
@@ -682,4 +528,48 @@ class CeleryQueueManager:
             yield subscription
         finally:
             await subscription.close()
-            
+
+    def _ensure_running(self) -> None:
+        if not self._is_running:
+            raise RuntimeError("Queue manager is not running. Call start() first.")
+        if self._redis is None:
+            raise RuntimeError("Redis client not initialized")
+    
+    async def start(self) -> None:
+        if self._is_running:
+            return
+
+        try:
+            import redis.asyncio as aioredis
+        except ImportError:
+            raise ImportError(
+                "redis[async] is required for CeleryQueueManager. "
+                "Install it with: pip install redis[async]"
+            )
+
+        self._redis = aioredis.from_url(
+            self._redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+        )
+
+        await self._redis.ping()
+
+        self._is_running = True
+
+    async def stop(self) -> None:
+        if not self._is_running:
+            return
+
+        self._is_running = False
+
+        if self._redis is not None:
+            await self._redis.close()
+            self._redis = None
+
+    async def __aenter__(self) -> "CeleryQueueManager":
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.stop()

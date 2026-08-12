@@ -68,7 +68,7 @@ class AgentTaskManager:
             self._btm_manager: BTMTaskManager = clauq_btm.setup(executors=executor_mapping)
 
         elif not clauq_btm.is_setup_complete:
-            self._btm_manager = clauq_btm.finalize_setup()
+            self._btm_manager = clauq_btm.setup()
 
         else:
             self._btm_manager = clauq_btm.get_task_manager()

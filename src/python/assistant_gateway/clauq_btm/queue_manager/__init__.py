@@ -65,14 +65,11 @@ from assistant_gateway.clauq_btm.queue_manager.subscription import (
 )
 
 __all__ = [
-    # Main classes
     "CeleryQueueManager",
     "RedisEventSubscription",
     "QueueInfo",
     "EventSubscription",
-    # Factory function
     "create_celery_task",
-    # Constants
     "TASK_KEY_PREFIX",
     "QUEUE_KEY_PREFIX",
     "QUEUE_META_PREFIX",
