@@ -1,7 +1,3 @@
-"""
-Serialization helpers for tasks and events in the Celery queue manager.
-"""
-
 from __future__ import annotations
 
 import json
@@ -13,14 +9,6 @@ from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 
 
 def serialize_for_redis_hset(data: Dict[str, Any]) -> Dict[str, str]:
-    """
-    Serialize a dictionary for Redis HSET operation.
-
-    Converts all values to strings:
-    - dict/list values are JSON-encoded
-    - None values become empty strings
-    - Other values are converted to str
-    """
     return {
         k: (
             json.dumps(v)
@@ -32,17 +20,14 @@ def serialize_for_redis_hset(data: Dict[str, Any]) -> Dict[str, str]:
 
 
 def serialize_task(task: ClauqBTMTask) -> Dict[str, Any]:
-    """Serialize a task for Redis storage."""
     return task.model_dump(mode="json", exclude={"executor"})
 
 
 def deserialize_task(data: Dict[str, Any]) -> ClauqBTMTask:
-    """Deserialize a task from Redis storage."""
     return ClauqBTMTask.model_validate(data)
 
 
 def serialize_event(event: TaskEvent) -> Dict[str, Any]:
-    """Serialize an event for pub/sub."""
     return {
         "event_type": event.event_type.value,
         "task_id": event.task_id,
@@ -51,12 +36,10 @@ def serialize_event(event: TaskEvent) -> Dict[str, Any]:
         "timestamp": event.timestamp.isoformat(),
         "error": event.error,
         "progress": event.progress,
-        "task": serialize_task(event.task) if event.task else None,
     }
 
 
 def deserialize_event(data: Dict[str, Any]) -> TaskEvent:
-    """Deserialize an event from pub/sub."""
     return TaskEvent(
         event_type=TaskEventType(data["event_type"]),
         task_id=data["task_id"],
@@ -65,5 +48,4 @@ def deserialize_event(data: Dict[str, Any]) -> TaskEvent:
         timestamp=datetime.fromisoformat(data["timestamp"]),
         error=data.get("error"),
         progress=data.get("progress"),
-        task=deserialize_task(data["task"]) if data.get("task") else None,
     )

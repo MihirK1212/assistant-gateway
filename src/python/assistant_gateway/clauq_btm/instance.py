@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, TypedDict
 
 from assistant_gateway.clauq_btm.executor_registry import (
     ExecutorConfig,
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 ExecutorFunc = Callable[["ClauqBTMTask"], Awaitable[Any]]
 PostExecutionFunc = Callable[["ClauqBTMTask", Any], Awaitable[None]]
 
+
 # {<executor_name>: {'executor': ExecutorFunc, 'post_execution': PostExecutionFunc}}
 class ExecutorMapping(TypedDict, total=False):
     executor: ExecutorFunc
@@ -44,27 +45,28 @@ class ClauqBTMSetupError(Exception):
 
 @dataclass
 class ClauqBTMConfig:
-    redis_url: str = "redis://localhost:6379/0"
-    celery_app_name: str = "clauq_btm"
-    celery_config: dict = field(default_factory=dict)
+    redis_url: str
+    celery_app_name: str
+    additional_celery_config: dict = field(default_factory=dict)
+
+    # Optional fixed set of queue names declared at startup
+    default_queues: List[str] = field(default_factory=list)
 
 
 class ClauqBTM:
     def __init__(
         self,
-        redis_url: str = "redis://localhost:6379/0",
-        celery_app_name: str = "clauq_btm",
-        celery_config: Optional[dict] = None,
-        config: Optional[ClauqBTMConfig] = None,
+        redis_url: str,
+        celery_app_name: str,
+        additional_celery_config: Optional[dict] = None,
+        default_queues: Optional[List[str]] = None,
     ) -> None:
-        if config is not None:
-            self._config = config
-        else:
-            self._config = ClauqBTMConfig(
-                redis_url=redis_url,
-                celery_app_name=celery_app_name,
-                celery_config=celery_config or {},
-            )
+        self._config = ClauqBTMConfig(
+            redis_url=redis_url,
+            celery_app_name=celery_app_name,
+            additional_celery_config=additional_celery_config or {},
+            default_queues=default_queues or [],
+        )
 
         self._executor_registry: ExecutorRegistry = ExecutorRegistry()
 
@@ -139,16 +141,15 @@ class ClauqBTM:
         """
         Setup the ClauqBTM instance and return a BTMTaskManager.
 
-        if executors provided => clear any previously registered executors and register the given ones 
-        if executors not provided => finalize with whatever executors were already registered
+        if executors provided => clear any previously registered executors and register the given ones
+        if executors not provided => finalize with whatever executors were already registered 
+                                    (via clauq_btm.register_executor() or @clauq_btm.executor_registry.register())
         """
         self._ensure_not_setup_complete("setup")
 
         if executors is not None:
             if not executors:
-                raise ValueError(
-                    "executors dict cannot be empty. "
-                )
+                raise ValueError("executors dict cannot be empty. ")
             self._executor_registry.clear()
             self._register_executors(executors)
 
@@ -159,14 +160,18 @@ class ClauqBTM:
         background_error = None
 
         try:
-            celery_app = ClauqBTM._create_celery_app(self._config)
+            celery_app = ClauqBTM._create_celery_app(
+                self._config.celery_app_name,
+                self._config.redis_url,
+                self._config.default_queues,
+                self._config.additional_celery_config,
+            )
             queue_manager = ClauqBTM._create_queue_manager(
-                celery_app, self._executor_registry, self._config.redis_url
+                celery_app, self._executor_registry, self._config.redis_url, self._config.default_queues
             )
         except Exception as e:
             logger.warning(
-                f"Failed to set up Celery/Redis backend: {e}. "
-                "Background tasks will fail; sync tasks will still work."
+                f"Failed to set up Celery/Redis backend: {e}. Background tasks will fail; sync tasks will still work."
             )
             background_error = e
             celery_app = None
@@ -243,16 +248,21 @@ class ClauqBTM:
             )
 
     @staticmethod
-    def _create_celery_app(config: ClauqBTMConfig) -> "Celery":
+    def _create_celery_app(
+        celery_app_name: str,
+        redis_url: str,
+        default_queues: Optional[List[str]] = None,
+        celery_config: Optional[dict] = None,
+    ) -> "Celery":
         try:
             from celery import Celery
         except ImportError:
             raise ImportError("celery is required for ClauqBTM. Install it with: pip install celery[redis]")
 
         app = Celery(
-            config.celery_app_name,
-            broker=config.redis_url,
-            backend=config.redis_url,
+            celery_app_name,
+            broker=redis_url,
+            backend=redis_url,
         )
 
         app.conf.update(
@@ -266,8 +276,17 @@ class ClauqBTM:
             worker_prefetch_multiplier=1,
         )
 
-        if config.celery_config:
-            app.conf.update(config.celery_config)
+        if default_queues:
+            try:
+                from kombu import Queue as KombuQueue
+            except ImportError:
+                raise ImportError("kombu is required for default_queues. Install it with: pip install kombu")
+
+            app.conf.task_queues = [KombuQueue(name) for name in default_queues]
+            app.conf.task_default_queue = default_queues[0]
+
+        if celery_config:
+            app.conf.update(celery_config)
 
         return app
 
@@ -276,6 +295,7 @@ class ClauqBTM:
         celery_app: "Celery",
         executor_registry: ExecutorRegistry,
         redis_url: str,
+        default_queues: List[str],
     ) -> "CeleryQueueManager":
         from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
 
@@ -283,6 +303,7 @@ class ClauqBTM:
             celery_app=celery_app,
             executor_registry=executor_registry,
             redis_url=redis_url,
+            default_queues=default_queues,
         )
 
     async def start(self) -> None:

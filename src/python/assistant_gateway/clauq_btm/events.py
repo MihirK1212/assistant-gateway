@@ -24,7 +24,6 @@ class TaskEvent:
     queue_id: str
     status: TaskStatus
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    task: Optional[ClauqBTMTask] = None
     error: Optional[str] = None
     progress: Optional[Dict[str, Any]] = None
 
@@ -41,7 +40,6 @@ class TaskEvent:
             task_id=task.id,
             queue_id=task.queue_id,
             status=task.status,
-            task=task,
             error=error,
             progress=progress,
         )

@@ -65,13 +65,13 @@ class AgentTaskManager:
 
         if executor is not None and not clauq_btm.is_setup_complete:
             executor_mapping = self._create_executor_mapping(executor, post_execution, executor_name)
-            self._btm_manager: BTMTaskManager = clauq_btm.setup(executors=executor_mapping)
+            self._btm_task_manager: BTMTaskManager = clauq_btm.setup(executors=executor_mapping)
 
         elif not clauq_btm.is_setup_complete:
-            self._btm_manager = clauq_btm.setup()
+            self._btm_task_manager = clauq_btm.setup()
 
         else:
-            self._btm_manager = clauq_btm.get_task_manager()
+            self._btm_task_manager = clauq_btm.get_task_manager()
 
     async def create_and_execute_task(
         self,
@@ -92,7 +92,7 @@ class AgentTaskManager:
         }
 
         if run_in_background:
-            btm_task = await self._btm_manager.create_and_enqueue(
+            btm_task = await self._btm_task_manager.create_and_enqueue(
                 queue_id=queue_id,
                 executor_name=self._executor_name,
                 payload=executor_payload,
@@ -107,7 +107,7 @@ class AgentTaskManager:
 
             btm_executor, btm_post_execution = self._create_btm_wrappers(self._executor, self._post_execution)
 
-            btm_task, result = await self._btm_manager.create_and_execute_sync(
+            btm_task, result = await self._btm_task_manager.create_and_execute_sync(
                 executor=btm_executor,
                 post_execution=btm_post_execution,
                 payload=executor_payload,
@@ -116,30 +116,19 @@ class AgentTaskManager:
             return self._btm_to_agent_task(btm_task), result
 
     async def get_task(self, task_id: str) -> Optional[Union[SynchronousAgentTask, BackgroundAgentTask]]:
-        btm_task = await self._btm_manager.get_task(task_id)
+        btm_task = await self._btm_task_manager.get_task(task_id)
         if btm_task is None:
             return None
         return self._btm_to_agent_task(btm_task)
 
     async def interrupt_task(self, task_id: str) -> Optional[Union[SynchronousAgentTask, BackgroundAgentTask]]:
-        btm_task = await self._btm_manager.interrupt_task(task_id)
+        btm_task = await self._btm_task_manager.interrupt_task(task_id)
         if btm_task is None:
             return None
         return self._btm_to_agent_task(btm_task)
 
-    async def wait_for_background_task(
-        self, task_id: str, timeout: Optional[float] = None
-    ) -> Optional[BackgroundAgentTask]:
-        btm_task = await self._btm_manager.wait_for_completion(task_id, timeout)
-        if btm_task is None:
-            return None
-        agent_task = self._btm_to_agent_task(btm_task)
-        if isinstance(agent_task, BackgroundAgentTask):
-            return agent_task
-        return None
-
     async def is_task_interrupted(self, task_id: str) -> bool:
-        return await self._btm_manager.is_task_interrupted(task_id)
+        return await self._btm_task_manager.is_task_interrupted(task_id)
 
     @asynccontextmanager
     async def subscribe(self, chat_id: str) -> AsyncIterator["EventSubscription"]:
@@ -157,7 +146,7 @@ class AgentTaskManager:
                 async for event in subscription:
                     print(f"Event: {event.event_type} for task {event.task_id}")
         """
-        async with self._btm_manager.subscribe(queue_id=chat_id) as subscription:
+        async with self._btm_task_manager.subscribe(queue_id=chat_id) as subscription:
             yield subscription
 
     def _btm_to_agent_task(self, btm_task: ClauqBTMTask) -> Union[SynchronousAgentTask, BackgroundAgentTask]:
@@ -238,14 +227,14 @@ class AgentTaskManager:
 
 
     async def start(self) -> None:
-        await self._btm_manager.start()
+        await self._btm_task_manager.start()
 
     async def stop(self) -> None:
-        await self._btm_manager.stop()
+        await self._btm_task_manager.stop()
 
     @property
     def is_running(self) -> bool:
-        return self._btm_manager.is_running
+        return self._btm_task_manager.is_running
 
     async def __aenter__(self) -> "AgentTaskManager":
         await self.start()

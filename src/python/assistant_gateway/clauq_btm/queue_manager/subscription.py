@@ -23,11 +23,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# -----------------------------------------------------------------------------
-# Event Subscription Base Class
-# -----------------------------------------------------------------------------
-
-
 class EventSubscription(abc.ABC):
     """
     Abstract subscription to task events.
