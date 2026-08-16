@@ -1,8 +1,8 @@
 """
-Command-line interface for the gateway runner.
+Launcher for the gateway runner.
 
-Provides a unified CLI to launch both FastAPI and Celery worker
-from a single command.
+Provides a single CLI entry point to launch both FastAPI and Celery worker
+from a JSON config file.
 """
 
 from __future__ import annotations
@@ -25,33 +25,14 @@ def get_default_celery_pool() -> str:
 
 
 def build_fastapi_command(
-    app_path: str,
     host: str = "127.0.0.1",
     port: int = 8000,
     reload: bool = True,
 ) -> List[str]:
-    """Build the FastAPI dev server command."""
-    cmd = [
-        sys.executable, "-m", "fastapi", "dev",
-        app_path.replace(":", ".").rsplit(".", 1)[0].replace(".", "/") + ".py",
-        "--host", host,
-        "--port", str(port),
-    ]
-    if not reload:
-        cmd.append("--no-reload")
-    return cmd
-
-
-def build_fastapi_uvicorn_command(
-    app_path: str,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    reload: bool = True,
-) -> List[str]:
-    """Build the uvicorn command for FastAPI."""
+    """Build the uvicorn command for FastAPI using the bootstrap runner module."""
     cmd = [
         sys.executable, "-m", "uvicorn",
-        app_path,
+        "assistant_gateway.runner._fastapi_runner:app",
         "--host", host,
         "--port", str(port),
     ]
@@ -95,13 +76,11 @@ class GatewayRunner:
     FastAPI can continue running with sync-only task execution.
     """
 
-    # Time to wait for Celery to start before checking if it failed
     CELERY_STARTUP_GRACE_PERIOD = 5.0  # seconds
 
     def __init__(
         self,
         config_path: str,
-        app_path: str,
         *,
         working_dir: Optional[str] = None,
         fastapi_host: str = "127.0.0.1",
@@ -113,10 +92,9 @@ class GatewayRunner:
         celery_extra_args: Optional[List[str]] = None,
         fastapi_only: bool = False,
         celery_only: bool = False,
-        celery_optional: bool = True,  # If True, continue with FastAPI if Celery fails
+        celery_optional: bool = True,
     ):
         self.config_path = config_path
-        self.app_path = app_path
         self.working_dir = working_dir or os.getcwd()
         self.fastapi_host = fastapi_host
         self.fastapi_port = fastapi_port
@@ -147,8 +125,7 @@ class GatewayRunner:
         if self.celery_only:
             return None
 
-        cmd = build_fastapi_uvicorn_command(
-            app_path=self.app_path,
+        cmd = build_fastapi_command(
             host=self.fastapi_host,
             port=self.fastapi_port,
             reload=self.fastapi_reload,
@@ -194,18 +171,16 @@ class GatewayRunner:
             True if Celery started successfully, False if it failed.
         """
         if self._celery_proc is None:
-            return True  # No Celery to check
+            return True
 
         print(f"Waiting {self.CELERY_STARTUP_GRACE_PERIOD}s for Celery to start...")
 
         start_time = time.time()
         while time.time() - start_time < self.CELERY_STARTUP_GRACE_PERIOD:
             if self._celery_proc.poll() is not None:
-                # Celery exited during startup
                 return False
             time.sleep(0.2)
 
-        # Check one more time after grace period
         if self._celery_proc.poll() is not None:
             return False
 
@@ -230,7 +205,6 @@ class GatewayRunner:
         print("    - Missing dependencies")
         print("=" * 60)
 
-        # Remove failed Celery from process list
         if self._celery_proc in self._processes:
             self._processes.remove(self._celery_proc)
         self._celery_proc = None
@@ -259,7 +233,7 @@ class GatewayRunner:
     def stop(self):
         """Stop all running processes."""
         for proc in self._processes:
-            if proc.poll() is None:  # Process is still running
+            if proc.poll() is None:
                 proc.terminate()
                 try:
                     proc.wait(timeout=5)
@@ -269,25 +243,18 @@ class GatewayRunner:
 
     def run(self):
         """Start all processes and wait for them to complete."""
-        # Register signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
-        # SIGTERM is not available on Windows
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, self._signal_handler)
 
         try:
-            # Validate that the config can be loaded before starting processes
             print(f"Validating config from: {self.config_path}")
             self._validate_config()
             print("Config validated successfully!\n")
 
-            # Start FastAPI first (it's the primary service)
             fastapi_proc = self._start_fastapi()
-
-            # Start Celery worker
             celery_proc = self._start_celery()
 
-            # Check if Celery started successfully (with grace period)
             if celery_proc is not None:
                 celery_started = self._check_celery_startup()
                 if not celery_started:
@@ -298,7 +265,6 @@ class GatewayRunner:
                 else:
                     self._celery_healthy = True
 
-            # Print startup summary
             print("\n" + "=" * 60)
             print("Gateway Runner Started!")
             print("=" * 60)
@@ -311,37 +277,31 @@ class GatewayRunner:
             print("=" * 60)
             print("Press Ctrl+C to stop all services\n")
 
-            # Main loop - monitor running processes
             while not self._shutting_down:
-                for proc in list(self._processes):  # Copy list to allow modification
+                for proc in list(self._processes):
                     if proc.poll() is not None:
-                        # A process exited
                         is_celery = proc == self._celery_proc
                         is_fastapi = proc == self._fastapi_proc
 
                         if is_celery and self.celery_optional and self._fastapi_proc:
-                            # Celery died but FastAPI is still running - continue
                             print(f"\nCelery worker exited (code {proc.returncode}). "
                                   "Continuing with FastAPI only...")
                             self._processes.remove(proc)
                             self._celery_proc = None
                             self._celery_healthy = False
                         elif is_fastapi:
-                            # FastAPI died - this is critical, shut down
                             print(f"\nFastAPI server exited with code {proc.returncode}")
                             if not self._shutting_down:
                                 self._shutting_down = True
                                 self.stop()
                                 return proc.returncode
                         else:
-                            # Unknown process or celery in required mode
                             print(f"\nProcess {proc.pid} exited with code {proc.returncode}")
                             if not self._shutting_down:
                                 self._shutting_down = True
                                 self.stop()
                                 return proc.returncode
 
-                # Brief sleep to avoid busy waiting
                 time.sleep(0.5)
 
         except KeyboardInterrupt:
@@ -352,36 +312,40 @@ class GatewayRunner:
         return 0
 
     def _validate_config(self):
-        """Validate that the config can be loaded."""
-        # Add working dir to path temporarily for validation
+        """Validate that the config can be loaded from the JSON file."""
         if self.working_dir not in sys.path:
             sys.path.insert(0, self.working_dir)
 
         try:
-            from assistant_gateway.runner.loader import load_config
-            config = load_config(self.config_path)
+            from assistant_gateway.runner.parse_config import parse_config
+            result = parse_config(self.config_path)
 
-            if config.clauq_btm is None:
+            if result.gateway_config.clauq_btm is None:
                 if self.celery_only:
                     raise ValueError(
-                        "clauq_btm is not configured in GatewayConfig, "
+                        "clauq_btm is not configured in the JSON config, "
                         "but --celery-only mode requires it."
                     )
                 elif not self.fastapi_only:
                     print(
-                        "Warning: clauq_btm is not configured in GatewayConfig.\n"
+                        "Warning: clauq_btm is not configured in the JSON config.\n"
                         "         Celery worker will not be started.\n"
                         "         Background tasks will not work (sync-only mode)."
                     )
-                    # Force FastAPI-only mode since there's no Celery to run
                     self.fastapi_only = True
+
+            if result.app is None and not self.celery_only:
+                raise ValueError(
+                    "rest_api is not configured in the JSON config, "
+                    "but a FastAPI app is required unless --celery-only is set."
+                )
         except Exception as e:
             print(f"Error loading config: {e}")
             raise
 
 
 def main(args: Optional[List[str]] = None):
-    """Main entry point for the CLI."""
+    """Main entry point for the launcher."""
     parser = argparse.ArgumentParser(
         prog="assistant-gateway",
         description="Launch FastAPI and Celery worker for the Assistant Gateway",
@@ -389,32 +353,20 @@ def main(args: Optional[List[str]] = None):
         epilog="""
 Examples:
   # Run with both FastAPI and Celery (graceful fallback if Celery fails)
-  python -m assistant_gateway.runner \\
-      --config myapp.config:build_gateway_config \\
-      --app myapp.api:app
+  python -m assistant_gateway.runner --config myapp.json
 
   # Require Celery to start (fail if Redis is unavailable)
-  python -m assistant_gateway.runner \\
-      --config myapp.config:build_gateway_config \\
-      --app myapp.api:app \\
-      --celery-required
+  python -m assistant_gateway.runner --config myapp.json --celery-required
 
   # Run only FastAPI (for development without background tasks)
-  python -m assistant_gateway.runner \\
-      --config myapp.config:build_gateway_config \\
-      --app myapp.api:app \\
-      --fastapi-only
+  python -m assistant_gateway.runner --config myapp.json --fastapi-only
 
   # Run only Celery worker (useful when scaling workers)
-  python -m assistant_gateway.runner \\
-      --config myapp.config:build_gateway_config \\
-      --app myapp.api:app \\
-      --celery-only
+  python -m assistant_gateway.runner --config myapp.json --celery-only
 
   # Custom ports and settings
   python -m assistant_gateway.runner \\
-      --config myapp.config:build_gateway_config \\
-      --app myapp.api:app \\
+      --config myapp.json \\
       --port 9000 \\
       --celery-pool threads \\
       --celery-concurrency 4
@@ -426,17 +378,10 @@ Graceful Degradation:
         """,
     )
 
-    # Required arguments
     parser.add_argument(
         "--config", "-c",
         required=True,
-        help="Module path to GatewayConfig (format: module.path:attribute). "
-             "Can be a config instance or a callable that returns one.",
-    )
-    parser.add_argument(
-        "--app", "-a",
-        required=True,
-        help="Module path to FastAPI app (format: module.path:app)",
+        help="Path to the JSON gateway config file.",
     )
 
     # FastAPI options
@@ -488,14 +433,12 @@ Graceful Degradation:
         help="Only start Celery worker (no FastAPI server)",
     )
 
-    # Celery fallback behavior
     parser.add_argument(
         "--celery-required",
         action="store_true",
         help="Fail if Celery worker cannot start (default: graceful fallback to FastAPI-only)",
     )
 
-    # Other options
     parser.add_argument(
         "--working-dir", "-w",
         help="Working directory for both processes (default: current directory)",
@@ -505,7 +448,6 @@ Graceful Degradation:
 
     runner = GatewayRunner(
         config_path=parsed.config,
-        app_path=parsed.app,
         working_dir=parsed.working_dir,
         fastapi_host=parsed.host,
         fastapi_port=parsed.port,

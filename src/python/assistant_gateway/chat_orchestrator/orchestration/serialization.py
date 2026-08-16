@@ -1,82 +1,39 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
-
-from assistant_gateway.chat_orchestrator.core.schemas import (
-    BackendServerContext,
-    ChatMetadata,
-    UserContext,
-)
-
 
 @dataclass
 class RunAgentExecutorPayload:
     """
-    Handles the serialization and deserialization of the payload for the agent executor 
-    While registering the executor, the payload needs to be serialzied 
-    While executing the executor, the payload needs to be deserialized
+    Handles the serialization and deserialization of the payload for the agent executor.
+
+    Serialized to a plain dict for distributed execution (Celery / ClauqBTM).
     """
 
-    chat: ChatMetadata
-    user_context: Optional[UserContext] = None
-    backend_server_context: Optional[BackendServerContext] = None
+    chat_id: str
+    agent_name: str
+    input_overrides: Optional[Dict[str, Dict[str, Any]]] = field(default=None)
 
     def serialize(self) -> Dict[str, Any]:
-        """
-        Serialize the payload for distributed execution (Celery).
-
-        Converts Pydantic models to JSON-serializable dicts.
-        """
         return {
-            "chat": self.chat.model_dump(mode="json"),
-            "user_context": (
-                self.user_context.model_dump(mode="json") if self.user_context else None
-            ),
-            "backend_server_context": (
-                self.backend_server_context.model_dump(mode="json")
-                if self.backend_server_context
-                else None
-            ),
+            "chat_id": self.chat_id,
+            "agent_name": self.agent_name,
+            "input_overrides": self.input_overrides,
         }
 
     @classmethod
     def deserialize(cls, data: Dict[str, Any]) -> "RunAgentExecutorPayload":
-        """
-        Deserialize the payload from a dict (received from Celery).
+        chat_id = data.get("chat_id")
+        if chat_id is None:
+            raise ValueError("chat_id is required in executor payload")
 
-        Converts dicts back to Pydantic models.
-        """
-        chat_data = data.get("chat")
-        if chat_data is None:
-            raise ValueError("chat is required in executor payload")
-
-        chat = (
-            ChatMetadata.model_validate(chat_data)
-            if isinstance(chat_data, dict)
-            else chat_data
-        )
-
-        user_context = None
-        user_ctx_data = data.get("user_context")
-        if user_ctx_data:
-            user_context = (
-                UserContext.model_validate(user_ctx_data)
-                if isinstance(user_ctx_data, dict)
-                else user_ctx_data
-            )
-
-        backend_server_context = None
-        backend_ctx_data = data.get("backend_server_context")
-        if backend_ctx_data:
-            backend_server_context = (
-                BackendServerContext.model_validate(backend_ctx_data)
-                if isinstance(backend_ctx_data, dict)
-                else backend_ctx_data
-            )
+        agent_name = data.get("agent_name")
+        if agent_name is None:
+            raise ValueError("agent_name is required in executor payload")
 
         return cls(
-            chat=chat,
-            user_context=user_context,
-            backend_server_context=backend_server_context,
+            chat_id=chat_id,
+            agent_name=agent_name,
+            input_overrides=data.get("input_overrides"),
         )

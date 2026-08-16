@@ -70,6 +70,7 @@ class AgentOutput(AgentInteraction):
     steps: List[AgentStep] = Field(default_factory=list)
     final_text: Optional[str] = None
     user_input_interaction_id: str
+    sdk_session_id: Optional[str] = None
 
     def __init__(self, **data):
         super().__init__(**data)

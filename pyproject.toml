@@ -3,7 +3,7 @@ name = "assistant-gateway"
 version = "0.1.0"
 
 [project.scripts]
-assistant-gateway = "assistant_gateway.runner.cli:main"
+assistant-gateway = "assistant_gateway.runner.launcher:main"
 
 [tool.setuptools]
 package-dir = {"" = "src/python"}

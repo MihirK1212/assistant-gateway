@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from assistant_gateway.chat_orchestrator.core.schemas import (
-    BackendServerContext,
     BackgroundAgentTask,
     ChatMetadata,
     SynchronousAgentTask,
-    UserContext,
 )
 from assistant_gateway.schemas import AgentOutput, UserInput
 from pydantic import BaseModel, Field
-
 
 class RunMode(str, Enum):   
     sync = "sync"
@@ -33,8 +30,15 @@ class CreateChatResponse(BaseModel):
 class SendMessageRequest(BaseModel):
     content: str
     run_mode: RunMode = RunMode.sync
-    user_context: Optional[UserContext] = None
-    backend_server_context: Optional[BackendServerContext] = None
+    input_overrides: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "Per-request runtime overrides injected into tool inputs. "
+            "Use '__global__' key for overrides that apply to every tool, "
+            "or a tool name key for tool-specific overrides. "
+            "Example: {\"__global__\": {\"backend_url\": \"...\", \"headers\": {\"Authorization\": \"Bearer ...\"}}}"
+        ),
+    )
 
 
 class SendMessageResponse(BaseModel):
@@ -66,8 +70,13 @@ class InterruptTaskResponse(BaseModel):
 
 class RerunTaskRequest(BaseModel):
     run_mode: RunMode = RunMode.sync
-    user_context: Optional[UserContext] = None
-    backend_server_context: Optional[BackendServerContext] = None
+    input_overrides: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "Per-request runtime overrides injected into tool inputs. "
+            "Same structure as SendMessageRequest.input_overrides."
+        ),
+    )
 
 
 class RerunTaskResponse(BaseModel):

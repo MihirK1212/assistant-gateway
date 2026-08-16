@@ -20,12 +20,10 @@ from assistant_gateway.chat_orchestrator.core.config import GatewayConfig
 from assistant_gateway.chat_orchestrator.core.schemas import (
     AgentInteraction,
     AgentTask,
-    BackendServerContext,
     BackgroundAgentTask,
     ChatMetadata,
     ChatStatus,
     SynchronousAgentTask,
-    UserContext,
 )
 from assistant_gateway.chat_orchestrator.orchestration.agent_session_manager import (
     AgentSessionManager,
@@ -59,10 +57,8 @@ class ConversationOrchestrator:
 
         self._agent_session_manager = AgentSessionManager(
             agent_configs=agent_configs,
-            default_fallback_config=self._config.default_fallback_config,
         )
 
-        # exectutor is registered in the init AgentTaskManager
         self._task_manager = AgentTaskManager(
             clauq_btm=self._config.get_clauq_btm(),
             executor=self._run_agent_for_task,
@@ -102,8 +98,7 @@ class ConversationOrchestrator:
         chat_id: str,
         content: str,
         run_in_background: bool,
-        user_context: Optional[UserContext] = None,
-        backend_server_context: Optional[BackendServerContext] = None,
+        input_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Tuple[ChatMetadata, Optional[AgentOutput], Optional[AgentTask]]:
         """
         If run_in_background is True, the task is returned.
@@ -116,8 +111,7 @@ class ConversationOrchestrator:
 
             return await self._run_agent_using_all_interactions(
                 chat=chat,
-                user_context=user_context,
-                backend_server_context=backend_server_context,
+                input_overrides=input_overrides,
                 run_in_background=run_in_background,
             )
 
@@ -136,14 +130,12 @@ class ConversationOrchestrator:
         self,
         chat_id: str,
         task_id: str,
-        user_context: Optional[UserContext] = None,
-        backend_server_context: Optional[BackendServerContext] = None,
+        input_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Tuple[ChatMetadata, Optional[AgentOutput], Optional[AgentTask]]:
         async with self._acquire_chat_lock(chat_id):
             task = await self.get_task(chat_id, task_id)
 
             if task.is_background:
-                # TODO: implement background task retry
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Rerunning background tasks is not supported. "
@@ -156,52 +148,29 @@ class ConversationOrchestrator:
 
             return await self._run_agent_using_all_interactions(
                 chat=chat,
-                user_context=user_context,
-                backend_server_context=backend_server_context,
+                input_overrides=input_overrides,
                 run_in_background=False,
             )
 
     @asynccontextmanager
     async def subscribe_to_events(self, chat_id: str) -> AsyncIterator["EventSubscription"]:
-        """
-        Subscribe to task events for a specific chat.
-
-        This allows real-time streaming of task lifecycle events (queued, started,
-        completed, failed, interrupted, progress) for all tasks in the given chat.
-
-        Args:
-            chat_id: The chat ID to subscribe to
-
-        Yields:
-            EventSubscription: An async iterator of TaskEvent objects
-
-        Example:
-            async with orchestrator.subscribe_to_events("chat-123") as subscription:
-                async for event in subscription:
-                    print(f"Event: {event.event_type} for task {event.task_id}")
-        """
         async with self._task_manager.subscribe(chat_id) as subscription:
             yield subscription
 
     async def _run_agent_using_all_interactions(
         self,
         chat: ChatMetadata,
-        user_context: Optional[UserContext] = None,
-        backend_server_context: Optional[BackendServerContext] = None,
+        input_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         run_in_background: bool = False,
     ) -> Tuple[ChatMetadata, Optional[AgentOutput], Optional[AgentTask]]:
-        """
-        Runs the agent for all interactions.
-        Validates that last interaction is a user input
-        """
         chat = await self.get_chat(chat.chat_id)
 
         user_input_interaction = await self._get_last_user_input_interaction(chat)
 
         payload = RunAgentExecutorPayload(
-            chat=chat,
-            user_context=user_context,
-            backend_server_context=backend_server_context,
+            chat_id=chat.chat_id,
+            agent_name=chat.agent_name,
+            input_overrides=input_overrides,
         )
 
         executor_payload = payload.serialize()
@@ -216,26 +185,15 @@ class ConversationOrchestrator:
         return chat, assistant_response, task
 
     async def _run_agent_for_task(self, task: AgentTask, executor_payload: dict[str, Any]) -> AgentOutput:
-        """
-        Run the agent for a task
-        Doesn't care whether the task is synchronous or background
-        Just executes the agent for the given task
-        """
         payload = RunAgentExecutorPayload.deserialize(executor_payload)
 
-        chat = payload.chat
-        user_context = payload.user_context
-        backend_server_context = payload.backend_server_context
-
-        interactions = await self._get_interactions_up_to(chat.chat_id, task.interaction_id)
+        interactions = await self._get_interactions_up_to(payload.chat_id, task.interaction_id)
 
         agent = self._agent_session_manager.get_or_create(
-            chat_id=chat.chat_id,
-            agent_name=chat.agent_name,
-            user_context=user_context,
-            backend_server_context=backend_server_context,
+            chat_id=payload.chat_id,
+            agent_name=payload.agent_name,
         )
-        response = await agent.run(interactions=interactions)
+        response = await agent.run(interactions=interactions, input_overrides=payload.input_overrides)
 
         if response.user_input_interaction_id != task.interaction_id:
             raise ValueError(

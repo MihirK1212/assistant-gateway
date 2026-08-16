@@ -73,8 +73,7 @@ async def send_chat_message(
         chat_id=chat_id,
         content=body.content,
         run_in_background=body.run_mode == RunMode.background,
-        user_context=body.user_context,
-        backend_server_context=body.backend_server_context,
+        input_overrides=body.input_overrides,
     )
     if task:
         response.status_code = status.HTTP_202_ACCEPTED
@@ -117,10 +116,8 @@ async def subscribe_to_chat_events(
     await websocket.accept()
 
     try:
-        # Subscribe to events for this chat via the orchestrator
         async with orchestrator.subscribe_to_events(chat_id) as subscription:
             async for event in subscription:
-                # Serialize event to JSON and send over WebSocket
                 event_data = serialize_event(event)
                 await websocket.send_json(event_data)
     except WebSocketDisconnect:
@@ -130,4 +127,4 @@ async def subscribe_to_chat_events(
         try:
             await websocket.close(code=1011, reason=str(e))
         except Exception:
-            pass  # Connection may already be closed
+            pass

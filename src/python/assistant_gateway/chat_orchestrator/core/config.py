@@ -5,46 +5,27 @@ from typing import TYPE_CHECKING, Callable, Dict, Mapping, Optional
 
 from assistant_gateway.agents.base import Agent
 from assistant_gateway.chat_orchestrator.chat.store import ChatStore, InMemoryChatStore
-from assistant_gateway.chat_orchestrator.core.schemas import (
-    BackendServerContext,
-    GatewayDefaultFallbackConfig,
-    UserContext,
-)
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm import ClauqBTM
 
 
 @dataclass
-class AgentConfig:
-    name: str
-    builder: Callable[
-        [
-            Optional[UserContext],
-            Optional[BackendServerContext],
-            Optional[GatewayDefaultFallbackConfig],
-        ],
-        Agent,
-    ]
-
-
-@dataclass
 class GatewayConfig:
     """
-    Configuration required to spin up the FastAPI gateway with minimal inputs.
+    Configuration required to spin up the FastAPI gateway.
 
-    - fallback_backend_url: used when neither the request nor the agent config provides one.
-    - agent_configs: mapping of agent name to configuration.
-    - default_agent_name: used when a chat omits the agent name.
+    - agent_configs: mapping of agent name to a zero-argument factory that
+      creates an Agent instance. Agents are created once per chat and cached
+      in memory; runtime context (auth tokens, backend URLs, etc.) is supplied
+      via input_overrides on each Agent.run() call instead.
     - chat_store: can be overridden; defaults to in-memory.
-    - clauq_btm: ClauqBTM instance for background task management.
-                 Required for background task execution.
+    - clauq_btm: required for background task execution.
     """
 
-    agent_configs: Mapping[str, AgentConfig]
+    agent_configs: Mapping[str, Callable[[], Agent]]
     chat_store: Optional[ChatStore] = None
     clauq_btm: Optional["ClauqBTM"] = None
-    default_fallback_config: Optional[GatewayDefaultFallbackConfig] = None
 
     def get_chat_store(self) -> ChatStore:
         return self.chat_store or InMemoryChatStore()
@@ -57,5 +38,5 @@ class GatewayConfig:
             )
         return self.clauq_btm
 
-    def get_agent_configs(self) -> Dict[str, AgentConfig]:
+    def get_agent_configs(self) -> Dict[str, Callable[[], Agent]]:
         return dict(self.agent_configs)

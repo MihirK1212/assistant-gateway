@@ -14,20 +14,6 @@ class ChatStatus(str, Enum):
     archived = "archived"
 
 
-class UserContext(BaseModel):
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
-    auth_token: Optional[str] = None
-
-
-class BackendServerContext(BaseModel):
-    base_url: Optional[str] = None
-
-
-class GatewayDefaultFallbackConfig(BaseModel):
-    fallback_backend_url: Optional[str] = None
-
-
 class AgentTask(BaseModel):
     """
     A task represents the execution of an agent for a specific user interaction.
@@ -45,7 +31,7 @@ class AgentTask(BaseModel):
     error: Optional[str] = None
     payload: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Additional data needed for task execution (e.g., user_context, backend_server_context)",
+        description="payload passed to the executor function",
     )
     is_background: bool = False
 

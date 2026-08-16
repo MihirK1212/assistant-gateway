@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 import httpx
 from assistant_gateway.errors import ToolExecutionError
 from assistant_gateway.schemas import ToolResult
-from assistant_gateway.tools.base import Tool, ToolConfig, ToolContext
+from assistant_gateway.tools.base import Tool, ToolContext
 from pydantic import BaseModel, Field, ValidationError, create_model
 
 
@@ -72,10 +72,10 @@ class RESTTool(Tool):
         )
         self._input_model = input_model
 
-        # build config using name, description, input model, output model, and backend_url
-        self._config = ToolConfig(
+        super().__init__(
             name=name,
             description=description,
+            run_callable=self._handle_request,
             input_model=input_model,
             input_description=f"{RESTTool.get_field_description_from_model(input_model)}",
             output_model=output_model,
@@ -84,9 +84,7 @@ class RESTTool(Tool):
             tool_level_input_overrides=tool_level_input_overrides,
         )
 
-        super().__init__(self._config)
-
-    async def run(self, context: ToolContext) -> ToolResult:
+    async def _handle_request(self, context: ToolContext) -> ToolResult:
         try:
             parsed_input = self._input_model(**context.input)
         except Exception as e:
@@ -186,7 +184,7 @@ class RESTTool(Tool):
         query_params_model: Optional[Type[BaseModel]] = None,
         data_payload_model: Optional[Type[BaseModel]] = None,
         json_payload_model: Optional[Type[BaseModel]] = None,
-    ) -> Type[BaseModel]:
+    ) -> Type[BaseRESTToolInput]:
         sanitized_name = "".join(ch if ch.isalnum() else "_" for ch in tool_name)
         class_name = f"{cls.__name__}Input_{sanitized_name}"
         return create_model(
