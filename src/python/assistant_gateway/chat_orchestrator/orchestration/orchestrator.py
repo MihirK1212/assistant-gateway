@@ -339,10 +339,6 @@ class ConversationOrchestrator:
     async def stop(self) -> None:
         await self._task_manager.stop()
 
-    @property
-    def is_running(self) -> bool:
-        return self._task_manager.is_running
-
     async def __aenter__(self) -> "ConversationOrchestrator":
         await self.start()
         return self

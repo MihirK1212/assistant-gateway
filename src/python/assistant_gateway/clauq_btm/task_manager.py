@@ -210,12 +210,6 @@ class BTMTaskManager:
             await self._queue_manager.stop()
 
     @property
-    def is_running(self) -> bool:
-        if self._queue_manager is None:
-            return True
-        return self._queue_manager.is_running
-
-    @property
     def is_background_tasks_available(self) -> bool:
         return self._queue_manager is not None
 

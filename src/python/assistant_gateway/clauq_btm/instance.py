@@ -76,7 +76,7 @@ class ClauqBTM:
 
         self._setup_state: SetupState = SetupState.NOT_STARTED
         self._background_setup_error: Optional[Exception] = None
-        self._is_running = False
+        self._started = False
 
     @property
     def config(self) -> ClauqBTMConfig:
@@ -121,10 +121,6 @@ class ClauqBTM:
             )
         assert self._queue_manager is not None, "Internal error: queue_manager is None after successful setup"
         return self._queue_manager
-
-    @property
-    def is_running(self) -> bool:
-        return self._is_running
 
     @property
     def is_background_tasks_available(self) -> bool:
@@ -309,18 +305,18 @@ class ClauqBTM:
     async def start(self) -> None:
         self._ensure_setup_complete("start")
 
-        if self._is_running:
+        if self._started:
             return
 
         if self._queue_manager is not None:
             await self._queue_manager.start()
-        self._is_running = True
+        self._started = True
 
     async def stop(self) -> None:
-        if not self._is_running:
+        if not self._started:
             return
 
-        self._is_running = False
+        self._started = False
 
         if self._queue_manager is not None:
             await self._queue_manager.stop()

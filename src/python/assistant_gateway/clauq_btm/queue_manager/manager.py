@@ -84,7 +84,7 @@ class CeleryQueueManager:
         self._celery_task = create_celery_task(celery_app, self._executor_registry)
 
         self._redis: Optional["Redis"] = None
-        self._is_running = False
+        self._started = False
         self._lock = asyncio.Lock() # TODO: check if centralized locking is needed
 
     @property
@@ -95,10 +95,6 @@ class CeleryQueueManager:
     def executor_registry(self) -> ExecutorRegistry:
         return self._executor_registry
 
-    @property
-    def is_running(self) -> bool:
-        return self._is_running
-
     async def enqueue(
         self,
         task: ClauqBTMTask
@@ -107,7 +103,7 @@ class CeleryQueueManager:
         Add a task to the back of the queue and route it to the corresponding
         Celery queue via apply_async(queue=queue_id)
         """
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         executor_name = task.executor_name
@@ -167,7 +163,7 @@ class CeleryQueueManager:
         """
         Create Redis metadata for a queue if it doesn't exist yet.
         """
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         if not self._default_queues:
@@ -205,7 +201,7 @@ class CeleryQueueManager:
         )
 
     async def get_queue_info(self, queue_id: str) -> Optional[QueueInfo]:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
@@ -246,7 +242,7 @@ class CeleryQueueManager:
             )
 
     async def delete_queue(self, queue_id: str) -> None:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
@@ -261,7 +257,7 @@ class CeleryQueueManager:
             await self._redis.delete(queue_key, meta_key)
 
     async def get(self, task_id: str) -> Optional[ClauqBTMTask]:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         task_key = f"{TASK_KEY_PREFIX}{task_id}"
@@ -285,7 +281,7 @@ class CeleryQueueManager:
         return deserialize_task(parsed_data)
 
     async def update(self, task: ClauqBTMTask) -> None:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         task_key = f"{TASK_KEY_PREFIX}{task.id}"
@@ -308,7 +304,7 @@ class CeleryQueueManager:
         )
 
     async def delete(self, queue_id: str, task_id: str) -> None:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         task_key = f"{TASK_KEY_PREFIX}{task_id}"
@@ -331,7 +327,7 @@ class CeleryQueueManager:
             await self._redis.delete(task_key, celery_task_key)
 
     async def list_tasks(self, queue_id: str) -> List[ClauqBTMTask]:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
@@ -347,7 +343,7 @@ class CeleryQueueManager:
         return tasks
 
     async def interrupt(self, queue_id: str, task_id: str) -> Optional[ClauqBTMTask]:
-        self._ensure_running()
+        self._ensure_started()
 
         async with self._lock:
             return await self._interrupt_task_internal(queue_id, task_id)
@@ -405,7 +401,7 @@ class CeleryQueueManager:
 
     @asynccontextmanager
     async def subscribe(self, queue_id: str) -> AsyncIterator[EventSubscription]:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
@@ -418,7 +414,7 @@ class CeleryQueueManager:
 
     @asynccontextmanager
     async def subscribe_all(self) -> AsyncIterator[EventSubscription]:
-        self._ensure_running()
+        self._ensure_started()
         assert self._redis is not None
 
         subscription = RedisEventSubscription(
@@ -432,14 +428,30 @@ class CeleryQueueManager:
         finally:
             await subscription.close()
 
-    def _ensure_running(self) -> None:
-        if not self._is_running:
+    async def is_healthy(self) -> bool:
+        if not self._started or self._redis is None:
+            return False
+
+        try:
+            await self._redis.ping()
+        except Exception:
+            return False
+
+        try:
+            inspector = self._celery_app.control.inspect(timeout=1.0)
+            pong = await asyncio.to_thread(inspector.ping)
+            return bool(pong)
+        except Exception:
+            return False
+
+    def _ensure_started(self) -> None:
+        if not self._started:
             raise RuntimeError("Queue manager is not running. Call start() first.")
         if self._redis is None:
             raise RuntimeError("Redis client not initialized")
 
     async def start(self) -> None:
-        if self._is_running:
+        if self._started:
             return
 
         try:
@@ -458,17 +470,17 @@ class CeleryQueueManager:
 
         await self._redis.ping()
 
-        self._is_running = True
+        self._started = True
 
         # Create Redis metadata for all default queues on startup.
         for queue_id in self._default_queues:
             await self.create_queue(queue_id)
 
     async def stop(self) -> None:
-        if not self._is_running:
+        if not self._started:
             return
 
-        self._is_running = False
+        self._started = False
 
         if self._redis is not None:
             await self._redis.close()

@@ -232,10 +232,6 @@ class AgentTaskManager:
     async def stop(self) -> None:
         await self._btm_task_manager.stop()
 
-    @property
-    def is_running(self) -> bool:
-        return self._btm_task_manager.is_running
-
     async def __aenter__(self) -> "AgentTaskManager":
         await self.start()
         return self
