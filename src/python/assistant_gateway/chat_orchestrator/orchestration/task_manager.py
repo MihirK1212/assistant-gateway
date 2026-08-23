@@ -79,12 +79,13 @@ class AgentTaskManager:
         interaction_id: str,
         executor_payload: Dict[str, Any],
         run_in_background: bool = False,
+        queue_id: Optional[str] = None,
     ) -> Tuple[Union[SynchronousAgentTask, BackgroundAgentTask], Optional[AgentOutput]]:
         """
         Create and execute a task, either synchronously or in background.
         Returns only task if it is a background task, otherwise returns the result of the task execution
         """
-        queue_id = self._get_queue_id_for_chat(chat)
+        resolved_queue_id = self._get_queue_id(requested_queue_id=queue_id)
         metadata = {
             METADATA_CHAT_ID: chat.chat_id,
             METADATA_INTERACTION_ID: interaction_id,
@@ -93,7 +94,7 @@ class AgentTaskManager:
 
         if run_in_background:
             btm_task = await self._btm_task_manager.create_and_enqueue(
-                queue_id=queue_id,
+                queue_id=resolved_queue_id,
                 executor_name=self._executor_name,
                 payload=executor_payload,
                 metadata=metadata,
@@ -131,22 +132,8 @@ class AgentTaskManager:
         return await self._btm_task_manager.is_task_interrupted(task_id)
 
     @asynccontextmanager
-    async def subscribe(self, chat_id: str) -> AsyncIterator["EventSubscription"]:
-        """
-        Subscribe to task events for a specific chat.
-
-        Args:
-            chat_id: The chat ID to subscribe to
-
-        Yields:
-            EventSubscription: An async iterator of TaskEvent objects
-
-        Example:
-            async with task_manager.subscribe("chat-123") as subscription:
-                async for event in subscription:
-                    print(f"Event: {event.event_type} for task {event.task_id}")
-        """
-        async with self._btm_task_manager.subscribe(queue_id=chat_id) as subscription:
+    async def subscribe(self, queue_id: Optional[str] = None) -> AsyncIterator["EventSubscription"]:
+        async with self._btm_task_manager.subscribe(queue_id=queue_id) as subscription:
             yield subscription
 
     def _btm_to_agent_task(self, btm_task: ClauqBTMTask) -> Union[SynchronousAgentTask, BackgroundAgentTask]:
@@ -222,8 +209,16 @@ class AgentTaskManager:
             }
         }
 
-    def _get_queue_id_for_chat(self, chat: ChatMetadata) -> str:
-        return chat.chat_id
+    def _get_queue_id(self, requested_queue_id: Optional[str] = None) -> str:
+        default_queues = self._clauq_btm.config.default_queues
+
+        if requested_queue_id:
+            return requested_queue_id
+
+        if default_queues:
+            return default_queues[0]
+
+        return "celery"
 
 
     async def start(self) -> None:

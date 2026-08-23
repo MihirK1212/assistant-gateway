@@ -29,6 +29,10 @@ class CreateChatResponse(BaseModel):
 class SendMessageRequest(BaseModel):
     content: str
     run_mode: RunMode = RunMode.sync
+    queue_id: Optional[str] = Field(
+        default=None,
+        description="Optional Celery queue name for background task execution",
+    )
     input_overrides: Optional[Dict[str, Dict[str, Any]]] = Field(
         default=None,
         description=(

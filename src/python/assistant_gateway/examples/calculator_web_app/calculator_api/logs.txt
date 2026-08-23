@@ -1,3 +1,2 @@
-[Received at: (2026-08-23 13:20:51)] [Printed at: (2026-08-23 13:21:57)] [Waited for: 65.12064848301966 seconds] {welcome to the jungle}
-[Received at: (2026-08-23 13:28:06)] [Printed at: (2026-08-23 13:29:24)] [Waited for: 76.82778274697857 seconds] {time to break things}
-[Received at: (2026-08-23 13:31:22)] [Printed at: (2026-08-23 13:32:32)] [Waited for: 69.33181883574173 seconds] {time to break things}
+[Received at: (2026-08-23 16:47:19)] [Printed at: (2026-08-23 16:48:21)] [Waited for: 61.23303550323461 seconds] {printing using low queue}
+[Received at: (2026-08-23 16:47:12)] [Printed at: (2026-08-23 16:48:25)] [Waited for: 72.92580266201017 seconds] {printing using high queue}

@@ -185,14 +185,18 @@ class BTMTaskManager:
         return task is not None and task.is_interrupted()
 
     @asynccontextmanager
-    async def subscribe(self, queue_id: str) -> AsyncIterator["EventSubscription"]:
+    async def subscribe(self, queue_id: Optional[str] = None) -> AsyncIterator["EventSubscription"]:
         if self._queue_manager is None:
             raise BackgroundTasksUnavailableError(
                 "Event subscription is not available because queue manager setup failed."
             )
 
-        async with self._queue_manager.subscribe(queue_id) as subscription:
-            yield subscription
+        if queue_id is not None:
+            async with self._queue_manager.subscribe(queue_id) as subscription:
+                yield subscription
+        else:
+            async with self._queue_manager.subscribe_all() as subscription:
+                yield subscription
 
     async def _update_task_status(self, task: ClauqBTMTask, status: TaskStatus) -> None:
         task.status = status

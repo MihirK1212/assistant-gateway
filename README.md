@@ -44,7 +44,7 @@ flowchart TB
 
         subgraph RestAPI["REST API Layer"]
             Router["FastAPI Router<br/>/chats, /messages, /tasks"]
-            WS["WebSocket<br/>/chats/{id}/events"]
+            WS["WebSocket<br/>/events (optional queue_id)"]
         end
 
         subgraph Orchestration["Chat Orchestrator"]
@@ -388,7 +388,7 @@ This single call:
 | `GET` | `/chats/{chat_id}/interactions` | List all interactions (ordered) | `200 OK` |
 | `POST` | `/chats/{chat_id}/messages` | Send a message (sync or background) | `200 OK` / `202 Accepted` |
 | `GET` | `/chats/{chat_id}/tasks/{task_id}` | Get task status and result | `200 OK` |
-| `WebSocket` | `/chats/{chat_id}/events` | Real-time task event stream | -- |
+| `WebSocket` | `/events (optional ?queue_id)` | Real-time task event stream | -- |
 
 #### Request / Response Models
 

@@ -7,8 +7,11 @@ import sys
 import websockets
 
 
-async def listen(chat_id: str):
-    url = f"ws://127.0.0.1:8000/api/v1/chats/{chat_id}/events"
+async def listen(queue_id: str = None):
+    if queue_id:
+        url = f"ws://127.0.0.1:8000/api/v1/events?queue_id={queue_id}"
+    else:
+        url = f"ws://127.0.0.1:8000/api/v1/events"
 
     async with websockets.connect(url) as ws:
         print(f"Connected to {url}")
@@ -24,9 +27,15 @@ async def listen(chat_id: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python chat_event_listener.py <chat_id>")
-        sys.exit(1)
-
-    chat_id = sys.argv[1]
-    asyncio.run(listen(chat_id))
+    queue_id = None
+    if len(sys.argv) > 1:
+        queue_id = sys.argv[1]
+    
+    if queue_id:
+        print(f"Usage: python chat_event_listener.py [queue_id]")
+        print(f"Listening to queue: {queue_id}")
+    else:
+        print(f"Usage: python chat_event_listener.py [queue_id]")
+        print(f"Listening to all events (no queue_id specified)")
+    
+    asyncio.run(listen(queue_id))

@@ -85,7 +85,7 @@ class CeleryQueueManager:
 
         self._redis: Optional["Redis"] = None
         self._started = False
-        self._lock = asyncio.Lock() # TODO: check if centralized locking is needed
+        self._lock = asyncio.Lock()  # TODO: check if centralized locking is needed
 
     @property
     def celery_app(self) -> "Celery":
@@ -95,10 +95,7 @@ class CeleryQueueManager:
     def executor_registry(self) -> ExecutorRegistry:
         return self._executor_registry
 
-    async def enqueue(
-        self,
-        task: ClauqBTMTask
-    ) -> None:
+    async def enqueue(self, task: ClauqBTMTask) -> None:
         """
         Add a task to the back of the queue and route it to the corresponding
         Celery queue via apply_async(queue=queue_id)
@@ -108,15 +105,11 @@ class CeleryQueueManager:
 
         executor_name = task.executor_name
         if executor_name is None:
-            raise RuntimeError(
-                "executor_name is required for CeleryQueueManager. "
-                "Set task.executor_name."
-            )
+            raise RuntimeError("executor_name is required for CeleryQueueManager. Set task.executor_name.")
 
         if executor_name not in self._executor_registry:
             raise KeyError(
-                f"Executor '{executor_name}' not found in registry. "
-                "Make sure it's registered before enqueueing tasks."
+                f"Executor '{executor_name}' not found in registry. Make sure it's registered before enqueueing tasks."
             )
 
         queue_id = task.queue_id
@@ -155,9 +148,7 @@ class CeleryQueueManager:
                 await self._redis.set(celery_task_key, celery_result.id)
 
             event = TaskEvent.from_task(TaskEventType.QUEUED, task)
-            await self._redis.publish(
-                events_channel, json.dumps(serialize_event(event))
-            )
+            await self._redis.publish(events_channel, json.dumps(serialize_event(event)))
 
     async def create_queue(self, queue_id: str) -> QueueInfo:
         """
@@ -175,8 +166,7 @@ class CeleryQueueManager:
 
         if queue_id not in self._default_queues:
             raise ValueError(
-                f"Queue '{queue_id}' is not in the configured default_queues. "
-                f"Allowed queues: {self._default_queues}"
+                f"Queue '{queue_id}' is not in the configured default_queues. Allowed queues: {self._default_queues}"
             )
 
         is_default = True
@@ -292,10 +282,7 @@ class CeleryQueueManager:
 
         current_status = await self._redis.hget(task_key, "status")
         if current_status != TaskStatus.pending.value:
-            raise RuntimeError(
-                f"Cannot update task with status {current_status}. "
-                "Only pending tasks can be updated."
-            )
+            raise RuntimeError(f"Cannot update task with status {current_status}. Only pending tasks can be updated.")
 
         task_data = serialize_task(task)
         await self._redis.hset(
@@ -314,9 +301,7 @@ class CeleryQueueManager:
         async with self._lock:
             current_status = await self._redis.hget(task_key, "status")
             if current_status == TaskStatus.in_progress.value:
-                raise RuntimeError(
-                    "Cannot delete a running task. Use interrupt() instead."
-                )
+                raise RuntimeError("Cannot delete a running task. Use interrupt() instead.")
 
             await self._redis.zrem(queue_key, task_id)
 
@@ -348,9 +333,7 @@ class CeleryQueueManager:
         async with self._lock:
             return await self._interrupt_task_internal(queue_id, task_id)
 
-    async def _interrupt_task_internal(
-        self, queue_id: str, task_id: str
-    ) -> Optional[ClauqBTMTask]:
+    async def _interrupt_task_internal(self, queue_id: str, task_id: str) -> Optional[ClauqBTMTask]:
         assert self._redis is not None
 
         task_key = f"{TASK_KEY_PREFIX}{task_id}"
@@ -393,9 +376,7 @@ class CeleryQueueManager:
 
         if task:
             event = TaskEvent.from_task(TaskEventType.INTERRUPTED, task)
-            await self._redis.publish(
-                events_channel, json.dumps(serialize_event(event))
-            )
+            await self._redis.publish(events_channel, json.dumps(serialize_event(event)))
 
         return task
 
@@ -458,8 +439,7 @@ class CeleryQueueManager:
             import redis.asyncio as aioredis
         except ImportError:
             raise ImportError(
-                "redis[async] is required for CeleryQueueManager. "
-                "Install it with: pip install redis[async]"
+                "redis[async] is required for CeleryQueueManager. Install it with: pip install redis[async]"
             )
 
         self._redis = aioredis.from_url(

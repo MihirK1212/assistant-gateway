@@ -94,7 +94,7 @@ def _ws_listener_thread(
         return
 
     async def _run() -> None:
-        url = f"{GATEWAY_WS_URL}{API_PREFIX}/chats/{chat_id}/events"
+        url = f"{GATEWAY_WS_URL}{API_PREFIX}/events"
         retry = 0
         while not stop_event.is_set() and retry < 10:
             try:

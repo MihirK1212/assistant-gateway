@@ -98,6 +98,7 @@ class ConversationOrchestrator:
         chat_id: str,
         content: str,
         run_in_background: bool,
+        queue_id: Optional[str] = None,
         input_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Tuple[ChatMetadata, Optional[AgentOutput], Optional[AgentTask]]:
         """
@@ -113,6 +114,7 @@ class ConversationOrchestrator:
                 chat=chat,
                 input_overrides=input_overrides,
                 run_in_background=run_in_background,
+                queue_id=queue_id,
             )
 
     async def get_task(self, chat_id: str, task_id: str) -> Union[SynchronousAgentTask, BackgroundAgentTask]:
@@ -154,8 +156,8 @@ class ConversationOrchestrator:
             )
 
     @asynccontextmanager
-    async def subscribe_to_events(self, chat_id: str) -> AsyncIterator["EventSubscription"]:
-        async with self._task_manager.subscribe(chat_id) as subscription:
+    async def subscribe_to_events(self, queue_id: Optional[str] = None) -> AsyncIterator["EventSubscription"]:
+        async with self._task_manager.subscribe(queue_id=queue_id) as subscription:
             yield subscription
 
     async def _run_agent_using_all_interactions(
@@ -163,6 +165,7 @@ class ConversationOrchestrator:
         chat: ChatMetadata,
         input_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         run_in_background: bool = False,
+        queue_id: Optional[str] = None,
     ) -> Tuple[ChatMetadata, Optional[AgentOutput], Optional[AgentTask]]:
         chat = await self.get_chat(chat.chat_id)
 
@@ -181,6 +184,7 @@ class ConversationOrchestrator:
             interaction_id=user_input_interaction.id,
             executor_payload=executor_payload,
             run_in_background=run_in_background,
+            queue_id=queue_id,
         )
         await self._add_task_to_chat(chat, task)
         return chat, assistant_response, task

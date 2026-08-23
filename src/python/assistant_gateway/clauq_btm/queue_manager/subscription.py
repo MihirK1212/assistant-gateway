@@ -28,6 +28,7 @@ class EventSubscription(abc.ABC):
     Abstract subscription to task events.
 
     Implementations should support async iteration:
+    async with EventSubscription() as subscription:
         async for event in subscription:
             print(event)
     """

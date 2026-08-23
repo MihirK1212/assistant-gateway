@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from assistant_gateway.schemas import (
     AgentInteraction,
@@ -25,7 +25,7 @@ async def run_claude_agent_for_interactions(
     Args:
         claude_agent_options: A ClaudeAgentOptions instance configured with the
             desired model, MCP servers, system prompt, and allowed tools.
-        interactions: Full ordered list of AgentInteractions for this chat up
+        interactions: Full list of AgentInteractions for this chat up
             to and including the latest user message.
 
     Returns:
@@ -37,16 +37,16 @@ async def run_claude_agent_for_interactions(
     from claude_agent_sdk import ClaudeSDKClient
     from claude_agent_sdk.types import ResultMessage
 
-    claude_messages, last_user_input = interactions_to_claude_messages(interactions)
+    interactions = _sort_interactions(interactions)
 
+    last_user_input: Optional[UserInput] = next(
+        (m for m in reversed(interactions) if isinstance(m, UserInput)),
+        None,
+    )
     if last_user_input is None:
         raise ValueError("interactions must contain at least one UserInput")
 
-    last_user_message = next(
-        (m for m in reversed(claude_messages) if m["role"] == "user"),
-        None,
-    )
-    prompt = last_user_message["content"] if last_user_message else ""
+    prompt = get_interaction_content(last_user_input) or ""
 
     previous_session_id = _extract_last_session_id(interactions)
     options = claude_agent_options
@@ -67,7 +67,14 @@ async def run_claude_agent_for_interactions(
     return output
 
 
+def _sort_interactions(interactions: List[AgentInteraction]) -> List[AgentInteraction]:
+    return sorted(
+        interactions,
+        key=lambda m: (m.sequence_id is None, m.sequence_id, m.created_at),
+    )
+
 def _extract_last_session_id(interactions: List[AgentInteraction]) -> str | None:
+    """Extract the most recent sdk_session_id from an ordered list of interactions."""
     for interaction in reversed(interactions):
         if isinstance(interaction, AgentOutput) and interaction.sdk_session_id:
             return interaction.sdk_session_id
@@ -95,37 +102,6 @@ def get_interaction_content(interaction: AgentInteraction) -> Optional[str]:
         return _stringify(interaction.content)
 
     return ""
-
-
-def interactions_to_claude_messages(
-    interactions: List[AgentInteraction],
-) -> Tuple[List[Dict[str, str]], Optional[UserInput]]:
-    """
-    Convert a list of AgentInteractions to Claude-format messages.
-
-    Returns:
-        (claude_messages, last_user_input)
-    """
-    sorted_interactions = sorted(
-        interactions,
-        key=lambda m: (m.sequence_id is None, m.sequence_id, m.created_at),
-    )
-
-    last_user_input: Optional[UserInput] = next(
-        (m for m in reversed(sorted_interactions) if isinstance(m, UserInput)),
-        None,
-    )
-
-    claude_messages: List[Dict[str, str]] = []
-    for msg in sorted_interactions:
-        if msg.role not in (Role.user, Role.assistant):
-            continue
-        content_text = get_interaction_content(msg)
-        if content_text is None:
-            continue
-        claude_messages.append({"role": msg.role.value, "content": _stringify(content_text)})
-
-    return claude_messages, last_user_input
 
 
 def parse_claude_messages_to_output(
