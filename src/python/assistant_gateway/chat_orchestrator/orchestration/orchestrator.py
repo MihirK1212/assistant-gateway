@@ -135,6 +135,7 @@ class ConversationOrchestrator:
         async with self._acquire_chat_lock(chat_id):
             task = await self.get_task(chat_id, task_id)
 
+            # TODO: implement background task retry
             if task.is_background:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

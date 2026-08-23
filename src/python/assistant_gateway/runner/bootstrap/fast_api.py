@@ -27,7 +27,7 @@ if config_path is None:
         "This variable should contain the path to your JSON gateway config file."
     )
 
-from assistant_gateway.runner.parse_config import parse_config
+from assistant_gateway.runner.config import parse_config
 
 parsed_config = parse_config(config_path)
 

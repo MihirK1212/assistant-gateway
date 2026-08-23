@@ -39,7 +39,7 @@ In a separate terminal, start the Celery worker for background task processing:
 python -m assistant_gateway.runner \
     --app assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.api:app \
     --config assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.gateway_config:config \
-    --celery-only
+    --celery
 ```
 
 ### 3. Start the Gateway API
@@ -50,7 +50,7 @@ In another terminal, start the FastAPI gateway server:
 python -m assistant_gateway.runner \
     --app assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.api:app \
     --config assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.gateway_config:config \
-    --fastapi-only
+    --fastapi
 ```
 
 ### 4. Launch the Streamlit Frontend
@@ -92,13 +92,13 @@ This single command:
 python -m assistant_gateway.runner \
     --config ...:build_gateway_config \
     --app ...:app \
-    --fastapi-only
+    --fastapi
 
 # Run only Celery worker (useful when scaling workers separately)
 python -m assistant_gateway.runner \
     --config ...:build_gateway_config \
     --app ...:app \
-    --celery-only
+    --celery
 
 # Custom settings
 python -m assistant_gateway.runner \

@@ -12,7 +12,7 @@ import sys
 from assistant_gateway.chat_orchestrator.orchestration.orchestrator import (
     ConversationOrchestrator,
 )
-from assistant_gateway.runner.parse_config import parse_config
+from assistant_gateway.runner.config import parse_config
 
 GATEWAY_WORKING_DIR_ENV_VAR = "GATEWAY_WORKING_DIR"
 cwd = os.environ.get(GATEWAY_WORKING_DIR_ENV_VAR)
@@ -33,17 +33,17 @@ if config_path is None:
     )
 
 parsed_config = parse_config(config_path)
-config = parsed_config.gateway_config
+gateway_config = parsed_config.gateway_config
 
-if config.clauq_btm is None:
+if gateway_config.clauq_btm is None:
     raise RuntimeError(
         "GatewayConfig.clauq_btm is not configured. Background task processing requires a ClauqBTM instance."
     )
 
 # create and start the orchestrator to register executors
 # without this, the Celery task won't have registered executors
-orchestrator = ConversationOrchestrator(config=config)
+orchestrator = ConversationOrchestrator(config=gateway_config)
 
 asyncio.run(orchestrator.start())
 
-celery_app = config.clauq_btm.celery_app
+celery_app = gateway_config.clauq_btm.celery_app

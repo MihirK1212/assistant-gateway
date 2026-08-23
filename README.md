@@ -416,9 +416,9 @@ assistant-gateway --config path/to/gateway_config.py --app path/to/api.py
 ```
 
 Options:
-- `--fastapi-only` -- Skip Celery worker (sync-only mode)
-- `--celery-only` -- Run only the Celery worker
-- `--celery-required` -- Fail if Celery/Redis setup fails (default: graceful degradation)
+- `--fastapi` -- Start only FastAPI server (no Celery worker)
+- `--celery` -- Start only Celery worker (no FastAPI server)
+- If neither flag is set, both FastAPI and Celery start. Any failure exits with error code 1.
 
 ### Manual Setup
 
