@@ -11,16 +11,15 @@ from assistant_gateway.chat_orchestrator.core.schemas import (
 from assistant_gateway.schemas import AgentOutput, UserInput
 from pydantic import BaseModel, Field
 
-class RunMode(str, Enum):   
+
+class RunMode(str, Enum):
     sync = "sync"
     background = "background"
 
 
 class CreateChatRequest(BaseModel):
     user_id: str
-    agent_name: Optional[str] = Field(
-        default=None, description="Agent to use for this chat"
-    )
+    agent_name: Optional[str] = Field(default=None, description="Agent to use for this chat")
 
 
 class CreateChatResponse(BaseModel):
@@ -36,7 +35,7 @@ class SendMessageRequest(BaseModel):
             "Per-request runtime overrides injected into tool inputs. "
             "Use '__global__' key for overrides that apply to every tool, "
             "or a tool name key for tool-specific overrides. "
-            "Example: {\"__global__\": {\"backend_url\": \"...\", \"headers\": {\"Authorization\": \"Bearer ...\"}}}"
+            'Example: {"__global__": {"backend_url": "...", "headers": {"Authorization": "Bearer ..."}}}'
         ),
     )
 
@@ -61,7 +60,7 @@ class TaskResponse(BaseModel):
 
 
 class InterruptTaskRequest(BaseModel):
-    pass  
+    pass
 
 
 class InterruptTaskResponse(BaseModel):

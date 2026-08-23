@@ -5,7 +5,7 @@ from assistant_gateway.schemas import AgentInteraction, AgentOutput
 from claude_agent_sdk import ClaudeAgentOptions
 
 
-class ClaudeAgent:
+class ClaudeBaseAgent:
     def get_claude_agent_options(input_overrides: Optional[Dict[str, Dict[str, Any]]] = None) -> ClaudeAgentOptions:
         raise NotImplementedError(
             "get_claude_agent_options is not implemented"
