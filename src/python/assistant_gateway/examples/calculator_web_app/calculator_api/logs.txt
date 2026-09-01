@@ -1,0 +1,2 @@
+[Received at: (2026-08-23 16:47:19)] [Printed at: (2026-08-23 16:48:21)] [Waited for: 61.23303550323461 seconds] {printing using low queue}
+[Received at: (2026-08-23 16:47:12)] [Printed at: (2026-08-23 16:48:25)] [Waited for: 72.92580266201017 seconds] {printing using high queue}

@@ -3,10 +3,20 @@ name = "assistant-gateway"
 version = "0.1.0"
 
 [project.scripts]
-assistant-gateway = "assistant_gateway.runner.cli:main"
+assistant-gateway = "assistant_gateway.runner.launcher:main"
 
 [tool.setuptools]
 package-dir = {"" = "src/python"}
 
 [tool.setuptools.packages.find]
 where = ["src/python"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["I"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-single-line = false

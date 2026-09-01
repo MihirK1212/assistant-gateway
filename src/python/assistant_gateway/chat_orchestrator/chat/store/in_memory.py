@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Dict, List, Optional
 
+from assistant_gateway.chat_orchestrator.chat.store.base import ChatStore
 from assistant_gateway.chat_orchestrator.core.schemas import ChatMetadata
 from assistant_gateway.schemas import AgentInteraction
-from assistant_gateway.chat_orchestrator.chat.store.base import ChatStore
 
 
 class InMemoryChatStore(ChatStore):

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import Any, Dict, List, Optional
 
-from assistant_gateway.schemas import AgentInteraction, AgentOutput 
+from assistant_gateway.schemas import AgentInteraction, AgentOutput
 
 
 class Agent(ABC):
@@ -13,6 +13,7 @@ class Agent(ABC):
     @abstractmethod
     async def run(
         self,
-        interactions: List[AgentInteraction]
+        interactions: List[AgentInteraction],
+        input_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> AgentOutput:
         raise NotImplementedError("Subclasses must implement this method")

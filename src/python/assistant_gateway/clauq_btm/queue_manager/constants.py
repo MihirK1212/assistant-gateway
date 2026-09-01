@@ -1,7 +1,3 @@
-"""
-Redis key prefixes and configuration constants for the Celery queue manager.
-"""
-
 # Redis key prefixes
 TASK_KEY_PREFIX = "clauq:task:"  # Hash storing task data
 QUEUE_KEY_PREFIX = "clauq:queue:"  # Sorted set for FIFO ordering

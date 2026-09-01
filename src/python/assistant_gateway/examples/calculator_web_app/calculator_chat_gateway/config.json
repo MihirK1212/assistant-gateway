@@ -1,0 +1,24 @@
+{
+    "agents": {
+        "calculator": "assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.agent:build_calculator_agent"
+    },
+    "chat_store": {
+        "type": "file_system",
+        "config": {
+            "file_path": "/home/mihir/projects/assistant-gateway/src/python/assistant_gateway/examples/calculator_web_app/chat_store/chats.json"
+        }
+    },
+    "clauq_btm": {
+        "redis_url": "redis://localhost:6379",
+        "celery_app_name": "calculator_assistant_gateway",
+        "default_queues": ["high", "medium", "low"]
+    },
+    "rest_api": {
+        "type": "fast_api",
+        "config": {
+            "app": "assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.app:app",
+            "api_prefix": "/api/v1",
+            "router_tags": ["assistant"]
+        }
+    }
+}

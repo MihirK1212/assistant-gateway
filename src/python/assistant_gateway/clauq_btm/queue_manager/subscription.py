@@ -8,7 +8,7 @@ import abc
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from assistant_gateway.clauq_btm.events import TaskEvent
 from assistant_gateway.clauq_btm.queue_manager.serialization import (
@@ -23,16 +23,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# -----------------------------------------------------------------------------
-# Event Subscription Base Class
-# -----------------------------------------------------------------------------
-
-
 class EventSubscription(abc.ABC):
     """
     Abstract subscription to task events.
 
     Implementations should support async iteration:
+    async with EventSubscription() as subscription:
         async for event in subscription:
             print(event)
     """

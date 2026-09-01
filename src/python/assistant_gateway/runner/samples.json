@@ -1,0 +1,46 @@
+[
+    {
+        "agents": {
+            "calculator": "assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.config.agent:build_calculator_agent"
+        },
+        "chat_store": {
+            "type": "file_system",
+            "config": {
+                "file_path": "chats.json"
+            }
+        },
+        "clauq_btm": {
+            "redis_url": "redis://localhost:6379",
+            "celery_app_name": "assistant_gateway",
+            "additional_celery_config": {},
+            "default_queues": [
+                "low_priority",
+                "medium_priority",
+                "high_priority"
+            ]
+        },
+        "rest_api": {
+            "type": "fast_api",
+            "config": {
+                "app": "assistant_gateway.examples.calculator_web_app.calculator_api.api:app",
+                "api_prefix": "/api/v1",
+                "router_tags": ["assistant"]
+            }
+        }
+    },
+    {
+        "agents": {
+            "calculator": "assistant_gateway.examples.calculator_web_app.calculator_chat_gateway.config.agent:build_calculator_agent"
+        },
+        "chat_store": "myapp.stores:build_chat_store",
+        "clauq_btm": "assistant_gateway.clauq_btm.instance:get_clauq_btm",
+        "rest_api": {
+            "type": "fast_api",
+            "config": {
+                "app": "assistant_gateway.examples.calculator_web_app.calculator_api.api:app",
+                "api_prefix": "/api/v1",
+                "router_tags": ["assistant"]
+            }
+        }
+    }
+]
