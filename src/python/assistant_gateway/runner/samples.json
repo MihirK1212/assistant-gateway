@@ -19,6 +19,7 @@
                 "high_priority"
             ]
         },
+        "lock_manager_redis_url": "redis://localhost:6379",
         "rest_api": {
             "type": "fast_api",
             "config": {
@@ -34,6 +35,7 @@
         },
         "chat_store": "myapp.stores:build_chat_store",
         "clauq_btm": "assistant_gateway.clauq_btm.instance:get_clauq_btm",
+        "lock_manager_redis_url": "redis://localhost:6379",
         "rest_api": {
             "type": "fast_api",
             "config": {

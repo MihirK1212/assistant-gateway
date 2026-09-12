@@ -13,6 +13,7 @@
         "celery_app_name": "calculator_assistant_gateway",
         "default_queues": ["high", "medium", "low"]
     },
+    "lock_manager_redis_url": "redis://localhost:6379",
     "rest_api": {
         "type": "fast_api",
         "config": {

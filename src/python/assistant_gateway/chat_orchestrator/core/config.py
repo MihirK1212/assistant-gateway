@@ -21,11 +21,14 @@ class GatewayConfig:
       via input_overrides on each Agent.run() call instead.
     - chat_store: can be overridden; defaults to in-memory.
     - clauq_btm: required for background task execution.
+    - lock_manager_redis_url: optional Redis URL for distributed locking across
+      gateway instances. If not provided, falls back to in-memory locking.
     """
 
     agent_configs: Mapping[str, Callable[[], Agent]]
     chat_store: Optional[ChatStore] = None
     clauq_btm: Optional["ClauqBTM"] = None
+    lock_manager_redis_url: Optional[str] = None
 
     def get_chat_store(self) -> ChatStore:
         return self.chat_store or InMemoryChatStore()
@@ -40,3 +43,4 @@ class GatewayConfig:
 
     def get_agent_configs(self) -> Dict[str, Callable[[], Agent]]:
         return dict(self.agent_configs)
+

@@ -60,7 +60,22 @@ def parse_config(config_path: str) -> ParseResult:
         else:
             raise ValueError(f"Unknown clauq_btm config: {clauq_btm_config!r}")
 
-    gateway_config = GatewayConfig(agent_configs=agents, chat_store=chat_store, clauq_btm=clauq_btm)
+    lock_manager_redis_url = user_config.get("lock_manager_redis_url")
+    if lock_manager_redis_url is None and user_config.get("lock_manager"):
+        lock_manager_config = user_config.get("lock_manager")
+        if isinstance(lock_manager_config, dict):
+            lock_manager_redis_url = lock_manager_config.get("redis_url")
+        elif isinstance(lock_manager_config, str):
+            lock_manager_redis_url = lock_manager_config
+        else:
+            raise ValueError(f"Unknown lock_manager config: {lock_manager_config!r}")
+
+    gateway_config = GatewayConfig(
+        agent_configs=agents,
+        chat_store=chat_store,
+        clauq_btm=clauq_btm,
+        lock_manager_redis_url=lock_manager_redis_url,
+    )
 
     app = None
     if user_config.get("rest_api"):

@@ -69,20 +69,3 @@ class InterruptTaskRequest(BaseModel):
 
 class InterruptTaskResponse(BaseModel):
     task: Union[SynchronousAgentTask, BackgroundAgentTask]
-
-
-class RerunTaskRequest(BaseModel):
-    run_mode: RunMode = RunMode.sync
-    input_overrides: Optional[Dict[str, Dict[str, Any]]] = Field(
-        default=None,
-        description=(
-            "Per-request runtime overrides injected into tool inputs. "
-            "Same structure as SendMessageRequest.input_overrides."
-        ),
-    )
-
-
-class RerunTaskResponse(BaseModel):
-    chat: ChatMetadata
-    assistant_response: Optional[AgentOutput] = None
-    task: Optional[Union[SynchronousAgentTask, BackgroundAgentTask]] = None

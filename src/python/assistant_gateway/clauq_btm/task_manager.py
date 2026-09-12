@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Dict, Optional
 from uuid import uuid4
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
+from assistant_gateway.locking import InMemoryLockManager
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
@@ -47,10 +47,11 @@ class BTMTaskManager:
             )
     """
 
-    def __init__(self, queue_manager: Optional["CeleryQueueManager"] = None) -> None:
+    def __init__(
+        self,
+        queue_manager: Optional["CeleryQueueManager"] = None,
+    ) -> None:
         self._queue_manager = queue_manager
-        self._lock = asyncio.Lock() # TODO: check if centralized locking is needed
-
         self._sync_tasks: Dict[str, ClauqBTMTask] = {}
 
     def create_task(
@@ -92,7 +93,7 @@ class BTMTaskManager:
             metadata=metadata,
         )
 
-        async with self._lock:
+        async with InMemoryLockManager.instance().acquire("sync_tasks"):
             self._sync_tasks[task.id] = task
 
         if task.is_interrupted():
@@ -151,7 +152,7 @@ class BTMTaskManager:
         return task
 
     async def get_task(self, task_id: str) -> Optional[ClauqBTMTask]:
-        async with self._lock:
+        async with InMemoryLockManager.instance().acquire("sync_tasks"):
             if task_id in self._sync_tasks:
                 return self._sync_tasks[task_id]
 
@@ -167,7 +168,7 @@ class BTMTaskManager:
         if task.is_terminal():
             return task
 
-        async with self._lock:
+        async with InMemoryLockManager.instance().acquire("sync_tasks"):
             if task_id in self._sync_tasks:
                 sync_task = self._sync_tasks[task_id]
                 if sync_task.status in (TaskStatus.pending, TaskStatus.in_progress):
@@ -201,7 +202,7 @@ class BTMTaskManager:
     async def _update_task_status(self, task: ClauqBTMTask, status: TaskStatus) -> None:
         task.status = status
         task.updated_at = datetime.now(timezone.utc)
-        async with self._lock:
+        async with InMemoryLockManager.instance().acquire("sync_tasks"):
             if task.id in self._sync_tasks:
                 self._sync_tasks[task.id] = task
 

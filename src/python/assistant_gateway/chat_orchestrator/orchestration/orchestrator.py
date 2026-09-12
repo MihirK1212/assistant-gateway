@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import (
@@ -34,11 +35,19 @@ from assistant_gateway.chat_orchestrator.orchestration.serialization import (
 from assistant_gateway.chat_orchestrator.orchestration.task_manager import (
     AgentTaskManager,
 )
+from assistant_gateway.locking import (
+    InMemoryLockManager,
+    LockAcquisitionTimeout,
+    LockManager,
+    RedisLockManager,
+)
 from assistant_gateway.schemas import AgentOutput, Role, UserInput
 from fastapi import HTTPException, status
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationOrchestrator:
@@ -49,7 +58,17 @@ class ConversationOrchestrator:
     ) -> None:
         self._config = config
         self._chat_store = self._config.get_chat_store()
-        self._chat_locks: Dict[str, asyncio.Lock] = {}
+
+        if self._config.lock_manager_redis_url is not None:
+            self._lock_manager: LockManager = RedisLockManager(
+                redis_url=self._config.lock_manager_redis_url
+            )
+        else:
+            logger.warning(
+                "No lock_manager_redis_url configured. Using in-memory locking. "
+                "This is NOT safe for multi-instance deployments."
+            )
+            self._lock_manager = InMemoryLockManager.instance()
 
         agent_configs = self._config.get_agent_configs()
         if not agent_configs:
@@ -128,33 +147,6 @@ class ConversationOrchestrator:
         async with self._acquire_chat_lock(chat_id):
             return await self._interrupt_task_unlocked(chat_id, task_id)
 
-    async def rerun_task(
-        self,
-        chat_id: str,
-        task_id: str,
-        input_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> Tuple[ChatMetadata, Optional[AgentOutput], Optional[AgentTask]]:
-        async with self._acquire_chat_lock(chat_id):
-            task = await self.get_task(chat_id, task_id)
-
-            # TODO: implement background task retry
-            if task.is_background:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Rerunning background tasks is not supported. "
-                    "Background task retry will be implemented separately.",
-                )
-
-            chat = await self.get_chat(chat_id)
-
-            await self._interrupt_task_unlocked(chat.chat_id, task_id)
-
-            return await self._run_agent_using_all_interactions(
-                chat=chat,
-                input_overrides=input_overrides,
-                run_in_background=False,
-            )
-
     @asynccontextmanager
     async def subscribe_to_events(self, queue_id: Optional[str] = None) -> AsyncIterator["EventSubscription"]:
         async with self._task_manager.subscribe(queue_id=queue_id) as subscription:
@@ -194,7 +186,7 @@ class ConversationOrchestrator:
 
         interactions = await self._get_interactions_up_to(payload.chat_id, task.interaction_id)
 
-        agent = self._agent_session_manager.get_or_create(
+        agent = await self._agent_session_manager.get_or_create(
             chat_id=payload.chat_id,
             agent_name=payload.agent_name,
         )
@@ -313,36 +305,28 @@ class ConversationOrchestrator:
         await self._chat_store.update_chat(chat)
 
     async def _add_task_to_chat(self, chat: ChatMetadata, task: AgentTask) -> None:
-        # TODO: why is current_task_id being updated immediately? what about queued tasks?
         chat.current_task_id = task.id
         chat.task_ids.append(task.id)
         await self._update_chat_timestamp(chat)
 
     @asynccontextmanager
     async def _acquire_chat_lock(self, chat_id: str) -> AsyncGenerator[None, None]:
-        # TODO: centralize all the locking to a distributed lock manager instead of in-memory
-
-        if chat_id not in self._chat_locks:
-            self._chat_locks[chat_id] = asyncio.Lock()
-        lock = self._chat_locks[chat_id]
-
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=1)
-        except asyncio.TimeoutError:
+            async with self._lock_manager.acquire(f"chat:{chat_id}", timeout=5.0):
+                yield
+        except LockAcquisitionTimeout:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Another operation is already in progress on this chat",
             )
-        try:
-            yield
-        finally:
-            lock.release()
 
     async def start(self) -> None:
         await self._task_manager.start()
 
     async def stop(self) -> None:
         await self._task_manager.stop()
+        if isinstance(self._lock_manager, RedisLockManager):
+            await self._lock_manager.close()
 
     async def __aenter__(self) -> "ConversationOrchestrator":
         await self.start()
