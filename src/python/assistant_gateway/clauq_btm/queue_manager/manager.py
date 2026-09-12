@@ -5,7 +5,6 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
@@ -30,6 +29,9 @@ from assistant_gateway.clauq_btm.queue_manager.constants import (
     QUEUE_META_PREFIX,
     TASK_KEY_PREFIX,
 )
+from assistant_gateway.clauq_btm.queue_manager.lua_scripts import (
+    UPDATE_TASK_LUA,
+)
 from assistant_gateway.clauq_btm.queue_manager.serialization import (
     deserialize_task,
     serialize_event,
@@ -41,22 +43,13 @@ from assistant_gateway.clauq_btm.queue_manager.subscription import (
     RedisEventSubscription,
 )
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
+from assistant_gateway.locking import RedisLockManager
 
 if TYPE_CHECKING:
     from celery import Celery
     from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class QueueInfo:
-    queue_id: str
-    pending_count: int
-    current_task_id: Optional[str] = None
-    is_processing: bool = False
-    created_at: Optional[datetime] = None
-    is_default: bool = False
 
 
 class CeleryQueueManager:
@@ -84,8 +77,8 @@ class CeleryQueueManager:
         self._celery_task = create_celery_task(celery_app, self._executor_registry)
 
         self._redis: Optional["Redis"] = None
+        self._lock_manager: Optional[RedisLockManager] = None
         self._started = False
-        self._lock = asyncio.Lock()  # TODO: check if centralized locking is needed
 
     @property
     def celery_app(self) -> "Celery":
@@ -102,6 +95,7 @@ class CeleryQueueManager:
         """
         self._ensure_started()
         assert self._redis is not None
+        assert self._lock_manager is not None
 
         executor_name = task.executor_name
         if executor_name is None:
@@ -126,7 +120,7 @@ class CeleryQueueManager:
         if self._default_queues:
             await self.create_queue(queue_id)
 
-        async with self._lock:
+        async with self._lock_manager.acquire(f"queue:{queue_id}", timeout=10.0):
             await self._redis.hset(
                 task_key,
                 mapping=serialize_for_redis_hset(task_data),
@@ -150,9 +144,9 @@ class CeleryQueueManager:
             event = TaskEvent.from_task(TaskEventType.QUEUED, task)
             await self._redis.publish(events_channel, json.dumps(serialize_event(event)))
 
-    async def create_queue(self, queue_id: str) -> QueueInfo:
+    async def create_queue(self, queue_id: str) -> str:
         """
-        Create Redis metadata for a queue if it doesn't exist yet.
+        Create Redis metadata for a queue if it doesn't exist yet using HSETNX.
         """
         self._ensure_started()
         assert self._redis is not None
@@ -170,81 +164,19 @@ class CeleryQueueManager:
             )
 
         is_default = True
-
         meta_key = f"{QUEUE_META_PREFIX}{queue_id}"
 
-        async with self._lock:
-            exists = await self._redis.exists(meta_key)
-
-            if not exists:
-                await self._redis.hset(
-                    meta_key,
-                    mapping={
-                        "queue_id": queue_id,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "is_default": "1" if is_default else "0",
-                    },
-                )
-
-        return await self.get_queue_info(queue_id) or QueueInfo(
-            queue_id=queue_id, pending_count=0, is_default=is_default
-        )
-
-    async def get_queue_info(self, queue_id: str) -> Optional[QueueInfo]:
-        self._ensure_started()
-        assert self._redis is not None
-
-        queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
-        meta_key = f"{QUEUE_META_PREFIX}{queue_id}"
-
-        async with self._lock:
-            exists = await self._redis.exists(meta_key)
-            if not exists:
-                return None
-
-            pending_count = await self._redis.zcard(queue_key)
-            meta = await self._redis.hgetall(meta_key)
-
-            task_ids = await self._redis.zrange(queue_key, 0, 0)
-            current_task_id = None
-            is_processing = False
-
-            if task_ids:
-                first_task_key = f"{TASK_KEY_PREFIX}{task_ids[0]}"
-                status = await self._redis.hget(first_task_key, "status")
-                if status == TaskStatus.in_progress.value:
-                    current_task_id = task_ids[0]
-                    is_processing = True
-
-            created_at = None
-            if meta.get("created_at"):
-                created_at = datetime.fromisoformat(meta["created_at"])
-
-            is_default = meta.get("is_default", "0") == "1"
-
-            return QueueInfo(
-                queue_id=queue_id,
-                pending_count=pending_count,
-                current_task_id=current_task_id,
-                is_processing=is_processing,
-                created_at=created_at,
-                is_default=is_default,
+        created = await self._redis.hsetnx(meta_key, "queue_id", queue_id)
+        if created:
+            await self._redis.hset(
+                meta_key,
+                mapping={
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "is_default": "1" if is_default else "0",
+                },
             )
 
-    async def delete_queue(self, queue_id: str) -> None:
-        self._ensure_started()
-        assert self._redis is not None
-
-        queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
-        meta_key = f"{QUEUE_META_PREFIX}{queue_id}"
-
-        async with self._lock:
-            task_ids = await self._redis.zrange(queue_key, 0, -1)
-
-            for task_id in task_ids:
-                await self._interrupt_task_internal(queue_id, task_id)
-
-            await self._redis.delete(queue_key, meta_key)
+        return queue_id
 
     async def get(self, task_id: str) -> Optional[ClauqBTMTask]:
         self._ensure_started()
@@ -275,30 +207,37 @@ class CeleryQueueManager:
         assert self._redis is not None
 
         task_key = f"{TASK_KEY_PREFIX}{task.id}"
-
-        exists = await self._redis.exists(task_key)
-        if not exists:
-            raise RuntimeError(f"Task {task.id} not found")
-
-        current_status = await self._redis.hget(task_key, "status")
-        if current_status != TaskStatus.pending.value:
-            raise RuntimeError(f"Cannot update task with status {current_status}. Only pending tasks can be updated.")
-
         task_data = serialize_task(task)
-        await self._redis.hset(
+        mapping = serialize_for_redis_hset(task_data)
+
+        flat_args: List[str] = [TaskStatus.pending.value]
+        for k, v in mapping.items():
+            flat_args.append(k)
+            flat_args.append(str(v))
+
+        res = await self._redis.eval(
+            UPDATE_TASK_LUA,
+            1,
             task_key,
-            mapping=serialize_for_redis_hset(task_data),
+            *flat_args,
         )
+
+        if res == -1:
+            raise RuntimeError(f"Task {task.id} not found")
+        elif res == -2:
+            current_status = await self._redis.hget(task_key, "status")
+            raise RuntimeError(f"Cannot update task with status {current_status}. Only pending tasks can be updated.")
 
     async def delete(self, queue_id: str, task_id: str) -> None:
         self._ensure_started()
         assert self._redis is not None
+        assert self._lock_manager is not None
 
         task_key = f"{TASK_KEY_PREFIX}{task_id}"
         queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
         celery_task_key = f"{CELERY_TASK_PREFIX}{task_id}"
 
-        async with self._lock:
+        async with self._lock_manager.acquire(f"task:{task_id}", timeout=10.0):
             current_status = await self._redis.hget(task_key, "status")
             if current_status == TaskStatus.in_progress.value:
                 raise RuntimeError("Cannot delete a running task. Use interrupt() instead.")
@@ -311,26 +250,11 @@ class CeleryQueueManager:
 
             await self._redis.delete(task_key, celery_task_key)
 
-    async def list_tasks(self, queue_id: str) -> List[ClauqBTMTask]:
-        self._ensure_started()
-        assert self._redis is not None
-
-        queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
-
-        task_ids = await self._redis.zrange(queue_key, 0, -1)
-
-        tasks = []
-        for task_id in task_ids:
-            task = await self.get(task_id)
-            if task:
-                tasks.append(task)
-
-        return tasks
-
     async def interrupt(self, queue_id: str, task_id: str) -> Optional[ClauqBTMTask]:
         self._ensure_started()
+        assert self._lock_manager is not None
 
-        async with self._lock:
+        async with self._lock_manager.acquire(f"task:{task_id}", timeout=10.0):
             return await self._interrupt_task_internal(queue_id, task_id)
 
     async def _interrupt_task_internal(self, queue_id: str, task_id: str) -> Optional[ClauqBTMTask]:
@@ -450,6 +374,8 @@ class CeleryQueueManager:
 
         await self._redis.ping()
 
+        self._lock_manager = RedisLockManager(redis_client=self._redis)
+
         self._started = True
 
         # Create Redis metadata for all default queues on startup.
@@ -465,6 +391,8 @@ class CeleryQueueManager:
         if self._redis is not None:
             await self._redis.close()
             self._redis = None
+
+        self._lock_manager = None
 
     async def __aenter__(self) -> "CeleryQueueManager":
         await self.start()

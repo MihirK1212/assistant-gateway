@@ -49,7 +49,6 @@ from assistant_gateway.clauq_btm.instance import (
 )
 from assistant_gateway.clauq_btm.queue_manager import (
     CeleryQueueManager,
-    QueueInfo,
 )
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.clauq_btm.task_manager import BTMTaskManager
@@ -64,7 +63,6 @@ __all__ = [
     "ExecutorConfig",
     "ExecutorFunc",
     "PostExecutionFunc",
-    "QueueInfo",
     "CeleryQueueManager",
     "BackgroundTasksUnavailableError",
     "ClauqBTM",

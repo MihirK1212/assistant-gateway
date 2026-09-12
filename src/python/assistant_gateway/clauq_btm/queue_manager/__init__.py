@@ -12,7 +12,6 @@ from assistant_gateway.clauq_btm.queue_manager.constants import (
 )
 from assistant_gateway.clauq_btm.queue_manager.manager import (
     CeleryQueueManager,
-    QueueInfo,
 )
 from assistant_gateway.clauq_btm.queue_manager.subscription import (
     EventSubscription,
@@ -22,7 +21,6 @@ from assistant_gateway.clauq_btm.queue_manager.subscription import (
 __all__ = [
     "CeleryQueueManager",
     "RedisEventSubscription",
-    "QueueInfo",
     "EventSubscription",
     "create_celery_task",
     "TASK_KEY_PREFIX",
