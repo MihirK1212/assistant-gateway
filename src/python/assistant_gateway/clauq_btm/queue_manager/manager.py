@@ -44,7 +44,7 @@ from assistant_gateway.clauq_btm.queue_manager.serialization import (
     serialize_task,
 )
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
-from assistant_gateway.locking import RedisLockManager
+from assistant_gateway.clauq_btm.locking import RedisLockManager
 
 if TYPE_CHECKING:
     from celery import Celery

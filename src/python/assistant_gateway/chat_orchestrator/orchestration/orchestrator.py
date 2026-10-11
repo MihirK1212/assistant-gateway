@@ -35,7 +35,7 @@ from assistant_gateway.chat_orchestrator.orchestration.serialization import (
 from assistant_gateway.chat_orchestrator.orchestration.task_manager import (
     AgentTaskManager,
 )
-from assistant_gateway.locking import (
+from assistant_gateway.clauq_btm.locking import (
     InMemoryLockManager,
     LockAcquisitionTimeout,
     LockManager,

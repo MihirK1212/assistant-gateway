@@ -74,7 +74,6 @@ class EventPublisher:
         event: Union[TaskEvent, Dict[str, Any]],
         channel: str,
     ) -> None:
-        """Publish a task event asynchronously."""
         client = await self._get_async_client()
         payload = _serialize_event_payload(event)
         await client.publish(channel, payload)
@@ -84,13 +83,11 @@ class EventPublisher:
         event: Union[TaskEvent, Dict[str, Any]],
         channel: str,
     ) -> None:
-        """Publish a task event synchronously."""
         client = self._get_sync_client()
         payload = _serialize_event_payload(event)
         client.publish(channel, payload)
 
     async def aclose(self) -> None:
-        """Close the Redis client if owned by this publisher."""
         if self._owns_client and self._redis is not None:
             if hasattr(self._redis, "aclose"):
                 await self._redis.aclose()
@@ -99,7 +96,6 @@ class EventPublisher:
             self._redis = None
 
     def close(self) -> None:
-        """Close the Redis client synchronously if owned by this publisher."""
         if self._owns_client and self._redis is not None:
             if hasattr(self._redis, "close"):
                 self._redis.close()

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, Dict, Mapping
 
 from assistant_gateway.agents.base import Agent
-from assistant_gateway.locking import InMemoryLockManager
+from assistant_gateway.clauq_btm.locking import InMemoryLockManager
 
 
 class AgentSessionManager:

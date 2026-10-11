@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Dict,
 from uuid import uuid4
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
-from assistant_gateway.locking import InMemoryLockManager
+from assistant_gateway.clauq_btm.locking import InMemoryLockManager
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm.events.sub import EventSubscription

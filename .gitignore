@@ -6,3 +6,4 @@ prompts/
 .env*
 node_modules/
 .vscode/
+.ruff_cache/
