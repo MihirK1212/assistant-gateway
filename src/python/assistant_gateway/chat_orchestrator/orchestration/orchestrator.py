@@ -45,7 +45,7 @@ from assistant_gateway.schemas import AgentOutput, Role, UserInput
 from fastapi import HTTPException, status
 
 if TYPE_CHECKING:
-    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
+    from assistant_gateway.clauq_btm.events.sub import EventSubscription
 
 logger = logging.getLogger(__name__)
 

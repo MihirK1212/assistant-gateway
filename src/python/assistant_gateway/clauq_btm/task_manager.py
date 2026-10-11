@@ -9,8 +9,8 @@ from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
 from assistant_gateway.locking import InMemoryLockManager
 
 if TYPE_CHECKING:
+    from assistant_gateway.clauq_btm.events.sub import EventSubscription
     from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
-    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
 
 
 class BackgroundTasksUnavailableError(Exception):

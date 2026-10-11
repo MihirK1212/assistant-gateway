@@ -5,11 +5,15 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from assistant_gateway.clauq_btm.events import TaskEventType
+from assistant_gateway.clauq_btm.events import (
+    EventPublisher,
+    TaskEvent,
+    TaskEventType,
+    get_events_channel,
+)
 from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
 from assistant_gateway.clauq_btm.queue_manager.constants import (
     COMPLETED_TASK_TTL,
-    EVENTS_CHANNEL_PREFIX,
     TASK_KEY_PREFIX,
 )
 from assistant_gateway.clauq_btm.queue_manager.serialization import (
@@ -65,7 +69,7 @@ def create_celery_task(
         task_id = task_data["id"]
         queue_id = task_data["queue_id"]
         task_key = f"{TASK_KEY_PREFIX}{task_id}"
-        events_channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
+        events_channel = get_events_channel(queue_id)
 
         def _get_task_status() -> Optional[str]:
             status = redis_client.hget(task_key, "status")
@@ -102,18 +106,18 @@ def create_celery_task(
             event_type: TaskEventType,
             status: TaskStatus,
             error: Optional[str] = None,
+            message: Optional[str] = None,
         ) -> None:
-            event = {
-                "event_type": event_type.value,
-                "task_id": task_id,
-                "queue_id": queue_id,
-                "status": status.value,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "error": error,
-                "progress": None,
-            }
+            event = TaskEvent(
+                event_type=event_type,
+                task_id=task_id,
+                queue_id=queue_id,
+                status=status,
+                error=error,
+                message=message,
+            )
             logger.info(f"Publishing event: {event} for task {task_id}")
-            redis_client.publish(events_channel, json.dumps(event))
+            EventPublisher(redis=redis_client).publish_sync(event, events_channel)
 
         try:
             current_status = _get_task_status()
