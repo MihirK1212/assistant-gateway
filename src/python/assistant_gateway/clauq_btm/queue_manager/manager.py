@@ -15,16 +15,22 @@ from typing import (
     Optional,
 )
 
-from assistant_gateway.clauq_btm.events import TaskEvent, TaskEventType
+from assistant_gateway.clauq_btm.events import (
+    ALL_EVENTS_CHANNEL,
+    EventPublisher,
+    EventSubscription,
+    RedisEventSubscription,
+    TaskEvent,
+    TaskEventType,
+    get_events_channel,
+)
 from assistant_gateway.clauq_btm.executor_registry import ExecutorRegistry
 from assistant_gateway.clauq_btm.queue_manager.celery_task import (
     create_celery_task,
 )
 from assistant_gateway.clauq_btm.queue_manager.constants import (
-    ALL_EVENTS_CHANNEL,
     CELERY_TASK_PREFIX,
     COMPLETED_TASK_TTL,
-    EVENTS_CHANNEL_PREFIX,
     QUEUE_KEY_PREFIX,
     QUEUE_META_PREFIX,
     TASK_KEY_PREFIX,
@@ -34,16 +40,11 @@ from assistant_gateway.clauq_btm.queue_manager.lua_scripts import (
 )
 from assistant_gateway.clauq_btm.queue_manager.serialization import (
     deserialize_task,
-    serialize_event,
     serialize_for_redis_hset,
     serialize_task,
 )
-from assistant_gateway.clauq_btm.queue_manager.subscription import (
-    EventSubscription,
-    RedisEventSubscription,
-)
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
-from assistant_gateway.locking import RedisLockManager
+from assistant_gateway.clauq_btm.locking import RedisLockManager
 
 if TYPE_CHECKING:
     from celery import Celery
@@ -110,7 +111,7 @@ class CeleryQueueManager:
         task_key = f"{TASK_KEY_PREFIX}{task.id}"
         queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
         celery_task_key = f"{CELERY_TASK_PREFIX}{task.id}"
-        events_channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
+        events_channel = get_events_channel(queue_id)
 
         task.executor_name = executor_name
 
@@ -142,7 +143,7 @@ class CeleryQueueManager:
                 await self._redis.set(celery_task_key, celery_result.id)
 
             event = TaskEvent.from_task(TaskEventType.QUEUED, task)
-            await self._redis.publish(events_channel, json.dumps(serialize_event(event)))
+            await EventPublisher(redis=self._redis).publish(event, events_channel)
 
     async def create_queue(self, queue_id: str) -> str:
         """
@@ -263,7 +264,7 @@ class CeleryQueueManager:
         task_key = f"{TASK_KEY_PREFIX}{task_id}"
         queue_key = f"{QUEUE_KEY_PREFIX}{queue_id}"
         celery_task_key = f"{CELERY_TASK_PREFIX}{task_id}"
-        events_channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
+        events_channel = get_events_channel(queue_id)
 
         task = await self.get(task_id)
         if task is None:
@@ -300,7 +301,7 @@ class CeleryQueueManager:
 
         if task:
             event = TaskEvent.from_task(TaskEventType.INTERRUPTED, task)
-            await self._redis.publish(events_channel, json.dumps(serialize_event(event)))
+            await EventPublisher(redis=self._redis).publish(event, events_channel)
 
         return task
 
@@ -309,7 +310,7 @@ class CeleryQueueManager:
         self._ensure_started()
         assert self._redis is not None
 
-        channel = f"{EVENTS_CHANNEL_PREFIX}{queue_id}"
+        channel = get_events_channel(queue_id)
         subscription = RedisEventSubscription(self._redis, channel)
 
         try:

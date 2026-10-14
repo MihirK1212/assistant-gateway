@@ -4,7 +4,10 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Optional
 
-from assistant_gateway.locking.base import LockAcquisitionTimeout, LockManager
+from assistant_gateway.clauq_btm.locking.base import (
+    LockAcquisitionTimeout,
+    LockManager,
+)
 
 
 class InMemoryLockManager(LockManager):

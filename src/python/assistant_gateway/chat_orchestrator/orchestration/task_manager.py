@@ -27,7 +27,7 @@ from assistant_gateway.schemas import AgentOutput
 
 if TYPE_CHECKING:
     from assistant_gateway.clauq_btm import ClauqBTM
-    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
+    from assistant_gateway.clauq_btm.events.sub import EventSubscription
 
 
 AgentTaskExecutor = Callable[[AgentTask, Dict[str, Any]], Awaitable[AgentOutput]]
