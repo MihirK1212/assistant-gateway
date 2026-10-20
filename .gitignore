@@ -1,8 +1,13 @@
 promtps/
 venv/
+src/python/venv/
 .env
 __pycache__/
+*.egg-info/
+dist/
+build/
 prompts/
 .env*
 node_modules/
 .vscode/
+.ruff_cache/

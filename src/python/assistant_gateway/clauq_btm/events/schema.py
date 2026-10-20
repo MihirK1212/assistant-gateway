@@ -15,6 +15,7 @@ class TaskEventType(str, Enum):
     FAILED = "failed"
     INTERRUPTED = "interrupted"
     PROGRESS = "progress"
+    LOG = "log"
 
 
 @dataclass
@@ -25,6 +26,7 @@ class TaskEvent:
     status: TaskStatus
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     error: Optional[str] = None
+    message: Optional[str] = None
     progress: Optional[Dict[str, Any]] = None
 
     @classmethod
@@ -33,6 +35,7 @@ class TaskEvent:
         event_type: TaskEventType,
         task: ClauqBTMTask,
         error: Optional[str] = None,
+        message: Optional[str] = None,
         progress: Optional[Dict[str, Any]] = None,
     ) -> "TaskEvent":
         return cls(
@@ -41,5 +44,6 @@ class TaskEvent:
             queue_id=task.queue_id,
             status=task.status,
             error=error,
+            message=message,
             progress=progress,
         )

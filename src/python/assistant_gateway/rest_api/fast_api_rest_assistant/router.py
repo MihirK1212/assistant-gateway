@@ -7,7 +7,7 @@ from typing import Optional
 from assistant_gateway.chat_orchestrator.orchestration.orchestrator import (
     ConversationOrchestrator,
 )
-from assistant_gateway.clauq_btm.queue_manager.serialization import serialize_event
+from assistant_gateway.clauq_btm.events.serialization import serialize_event
 from assistant_gateway.rest_api.schemas import (
     ChatInteractionsResponse,
     ChatResponse,

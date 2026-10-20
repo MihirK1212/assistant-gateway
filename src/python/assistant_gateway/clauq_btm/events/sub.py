@@ -10,8 +10,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
-from assistant_gateway.clauq_btm.events import TaskEvent
-from assistant_gateway.clauq_btm.queue_manager.serialization import (
+from assistant_gateway.clauq_btm.events.schema import TaskEvent
+from assistant_gateway.clauq_btm.events.serialization import (
     deserialize_event,
 )
 

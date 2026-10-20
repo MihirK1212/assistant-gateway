@@ -6,7 +6,10 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, AsyncIterator, Optional
 
-from assistant_gateway.locking.base import LockAcquisitionTimeout, LockManager
+from assistant_gateway.clauq_btm.locking.base import (
+    LockAcquisitionTimeout,
+    LockManager,
+)
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis

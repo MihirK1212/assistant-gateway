@@ -46,4 +46,9 @@ orchestrator = ConversationOrchestrator(config=gateway_config)
 
 asyncio.run(orchestrator.start())
 
+"""
+- the celery app variable here is used to start the celery workers
+- but the webservices use a different celery app created inside a different clauq_btm instance
+- the webservice clauq_btm -> celery communicates with the celery workers via the redis broker, and the workers execute the registered executor function
+"""
 celery_app = gateway_config.clauq_btm.celery_app

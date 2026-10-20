@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Dict,
 from uuid import uuid4
 
 from assistant_gateway.clauq_btm.schemas import ClauqBTMTask, TaskStatus
-from assistant_gateway.locking import InMemoryLockManager
+from assistant_gateway.clauq_btm.locking import InMemoryLockManager
 
 if TYPE_CHECKING:
+    from assistant_gateway.clauq_btm.events.sub import EventSubscription
     from assistant_gateway.clauq_btm.queue_manager import CeleryQueueManager
-    from assistant_gateway.clauq_btm.queue_manager.subscription import EventSubscription
 
 
 class BackgroundTasksUnavailableError(Exception):
@@ -54,27 +54,6 @@ class BTMTaskManager:
         self._queue_manager = queue_manager
         self._sync_tasks: Dict[str, ClauqBTMTask] = {}
 
-    def create_task(
-        self,
-        is_background_task: bool,
-        queue_id: Optional[str] = None,
-        executor_name: Optional[str] = None,
-        payload: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> ClauqBTMTask:
-        now = datetime.now(timezone.utc)
-        return ClauqBTMTask(
-            id=str(uuid4()),
-            is_background_task=is_background_task,
-            queue_id=queue_id,
-            executor_name=executor_name,
-            status=TaskStatus.pending,
-            created_at=now,
-            updated_at=now,
-            payload=payload or {},
-            metadata=metadata or {},
-        )
-
     async def create_and_execute_sync(
         self,
         executor: TaskExecutor,
@@ -85,7 +64,7 @@ class BTMTaskManager:
         """
         Create and execute a task synchronously (inline).
         """
-        task = self.create_task(
+        task = self._create_task(
             is_background_task=False,
             queue_id=None,
             executor_name=None,
@@ -139,13 +118,19 @@ class BTMTaskManager:
                 "Use create_and_execute_sync() for synchronous task execution."
             )
 
-        task = self.create_task(
+        task = self._create_task(
             is_background_task=True,
             queue_id=queue_id,
             executor_name=executor_name,
             payload=payload,
             metadata=metadata,
         )
+
+
+        if not await self._queue_manager.is_healthy():
+            raise BackgroundTasksUnavailableError(
+                "Background tasks are not available because queue manager is not healthy."
+            )
 
         await self._queue_manager.enqueue(task)
 
@@ -198,6 +183,27 @@ class BTMTaskManager:
         else:
             async with self._queue_manager.subscribe_all() as subscription:
                 yield subscription
+
+    def _create_task(
+        self,
+        is_background_task: bool,
+        queue_id: Optional[str] = None,
+        executor_name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ClauqBTMTask:
+        now = datetime.now(timezone.utc)
+        return ClauqBTMTask(
+            id=str(uuid4()),
+            is_background_task=is_background_task,
+            queue_id=queue_id,
+            executor_name=executor_name,
+            status=TaskStatus.pending,
+            created_at=now,
+            updated_at=now,
+            payload=payload or {},
+            metadata=metadata or {},
+        )
 
     async def _update_task_status(self, task: ClauqBTMTask, status: TaskStatus) -> None:
         task.status = status

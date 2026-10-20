@@ -47,6 +47,12 @@ from assistant_gateway.clauq_btm.instance import (
     ClauqBTMSetupError,
     SetupState,
 )
+from assistant_gateway.clauq_btm.locking import (
+    InMemoryLockManager,
+    LockAcquisitionTimeout,
+    LockManager,
+    RedisLockManager,
+)
 from assistant_gateway.clauq_btm.queue_manager import (
     CeleryQueueManager,
 )
@@ -69,4 +75,8 @@ __all__ = [
     "ClauqBTMConfig",
     "ClauqBTMSetupError",
     "SetupState",
+    "LockAcquisitionTimeout",
+    "LockManager",
+    "InMemoryLockManager",
+    "RedisLockManager",
 ]
